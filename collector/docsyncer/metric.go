@@ -34,3 +34,15 @@ func (cm *CollectionMetric) String() string {
 			cm.FinishCount, cm.TotalCount)
 	}
 }
+
+func (cm *CollectionMetric) PromMetric() (float64, float64, float64) {
+	if cm.CollectionStatus == StatusWaitStart {
+		return 0, 0, 0
+	}
+
+	if cm.TotalCount == 0 {
+		return 0, float64(cm.FinishCount), float64(cm.TotalCount)
+	} else {
+		return float64(cm.FinishCount) / float64(cm.TotalCount) * 100, float64(cm.FinishCount), float64(cm.TotalCount)
+	}
+}

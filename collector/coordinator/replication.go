@@ -36,6 +36,8 @@ type ReplicationCoordinator struct {
 	// syncerGroup and workerGroup number is 1:N in ReplicaSet.
 	// 1:1 while replicated in shard cluster
 	syncerGroup []*collector.OplogSyncer
+
+	// sync worker
 }
 
 func (coordinator *ReplicationCoordinator) Run() error {
@@ -81,21 +83,21 @@ func (coordinator *ReplicationCoordinator) Run() error {
 	case utils.VarSyncModeAll:
 		if conf.Options.FullSyncReaderOplogStoreDisk {
 			LOG.Info("run parallel document oplog")
-			if err := coordinator.parallelDocumentOplog(fullBeginTs); err != nil {
+			if err = coordinator.parallelDocumentOplog(fullBeginTs); err != nil {
 				return err
 			}
 		} else {
 			LOG.Info("run serialize document oplog")
-			if err := coordinator.serializeDocumentOplog(fullBeginTs); err != nil {
+			if err = coordinator.serializeDocumentOplog(fullBeginTs); err != nil {
 				return err
 			}
 		}
 	case utils.VarSyncModeFull:
-		if err := coordinator.startDocumentReplication(); err != nil {
+		if err = coordinator.startDocumentReplication(); err != nil {
 			return err
 		}
 	case utils.VarSyncModeIncr:
-		if err := coordinator.startOplogReplication(int64(0), int64(0), startTsMap); err != nil {
+		if err = coordinator.startOplogReplication(int64(0), int64(0), startTsMap); err != nil {
 			return err
 		}
 	default:
@@ -236,8 +238,11 @@ func (coordinator *ReplicationCoordinator) serializeDocumentOplog(fullBeginTs in
 // TODO, set initSyncFinishTs into worker
 // run full-sync and incr-sync in parallel
 func (coordinator *ReplicationCoordinator) parallelDocumentOplog(fullBeginTs interface{}) error {
-	var docError error
-	var docWg sync.WaitGroup
+	var (
+		docWg    sync.WaitGroup
+		docError error
+	)
+
 	docWg.Add(1)
 	nimo.GoRoutine(func() {
 		defer docWg.Done()
@@ -247,20 +252,25 @@ func (coordinator *ReplicationCoordinator) parallelDocumentOplog(fullBeginTs int
 		}
 		LOG.Info("------------------------full sync done!------------------------")
 	})
+
 	// during document replication, oplog syncer fetch oplog and store on disk, in order to avoid oplog roll up
 	// fullSyncFinishPosition means no need to check the end time to disable DDL
 	if err := coordinator.startOplogReplication(fullBeginTs, int64(0), nil); err != nil {
 		return LOG.Critical("start oplog replication failed: %v", err)
 	}
+
 	// wait for document replication to finish, set docEndTs to oplog syncer, start oplog replication
 	docWg.Wait()
+
 	if docError != nil {
 		return docError
 	}
 	LOG.Info("finish document replication, change oplog replication to %v",
 		utils.LogFetchStage(utils.FetchStageStoreDiskApply))
+
 	for _, syncer := range coordinator.syncerGroup {
 		syncer.StartDiskApply()
 	}
+
 	return nil
 }

@@ -149,7 +149,7 @@ func ParseIntFromInterface(input interface{}) (int64, error) {
 	panic("can't see me!")
 }
 
-// one writer and multi readers
+// OpsCounter one writer and multi readers
 type OpsCounter struct {
 	counter [OpsMax + 1]uint64
 }

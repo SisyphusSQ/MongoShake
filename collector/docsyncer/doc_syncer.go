@@ -157,7 +157,7 @@ func StartNamespaceSpecSyncForSharding(csUrl string, toConn *utils.MongoCommunit
 			}
 		}
 	}
-	if err := docCursor.Close(nil); err != nil {
+	if err = docCursor.Close(nil); err != nil {
 		LOG.Critical("Close iterator of config.database failed. %v", err)
 	}
 
@@ -299,6 +299,7 @@ func Checkpoint(ckptMap map[string]utils.TimestampNode) error {
 
 /************************************************************************/
 // 1 shard -> 1 DBSyncer
+
 type DBSyncer struct {
 	// syncer id
 	id int
@@ -306,7 +307,7 @@ type DBSyncer struct {
 	FromMongoUrl string
 	fromReplset  string
 	// destination mongodb url
-	ToMongoUrl string
+	ToUrl string
 	// start time of sync
 	startTime time.Time
 	// source is sharding?
@@ -341,7 +342,7 @@ func NewDBSyncer(
 		id:             id,
 		FromMongoUrl:   fromMongoUrl,
 		fromReplset:    fromReplset,
-		ToMongoUrl:     toMongoUrl,
+		ToUrl:          toMongoUrl,
 		nsTrans:        nsTrans,
 		orphanFilter:   orphanFilter,
 		qos:            qos,
@@ -356,7 +357,7 @@ func NewDBSyncer(
 func (syncer *DBSyncer) String() string {
 	return fmt.Sprintf("DBSyncer id[%v] source[%v] target[%v] startTime[%v]",
 		syncer.id, utils.BlockMongoUrlPassword(syncer.FromMongoUrl, "***"),
-		utils.BlockMongoUrlPassword(syncer.ToMongoUrl, "***"), syncer.startTime)
+		utils.BlockMongoUrlPassword(syncer.ToUrl, "***"), syncer.startTime)
 }
 
 func (syncer *DBSyncer) Init() {
@@ -415,10 +416,15 @@ func (syncer *DBSyncer) Start() (syncError error) {
 					break
 				}
 
-				toNS := utils.NewNS(syncer.nsTrans.Transform(ns.Str()))
+				var toNS utils.NS
+				if conf.Options.FullSyncKafkaSend {
+					toNS = ns
+				} else {
+					toNS = utils.NewNS(syncer.nsTrans.Transform(ns.Str()))
+				}
 
 				LOG.Info("%s collExecutor-%d sync ns %v to %v begin", syncer, collExecutorId, ns, toNS)
-				err := syncer.collectionSync(collExecutorId, ns, toNS)
+				err = syncer.collectionSync(collExecutorId, ns, toNS)
 				atomic.AddInt32(&nsDoneCount, 1)
 
 				if err != nil {
@@ -445,7 +451,7 @@ func (syncer *DBSyncer) Start() (syncError error) {
 // start sync single collection
 func (syncer *DBSyncer) collectionSync(collExecutorId int, ns utils.NS, toNS utils.NS) error {
 	// writer
-	colExecutor := NewCollectionExecutor(collExecutorId, syncer.ToMongoUrl, toNS, syncer, conf.Options.TunnelMongoSslRootCaFile)
+	colExecutor := NewCollectionExecutor(collExecutorId, syncer.ToUrl, toNS, syncer, conf.Options.TunnelMongoSslRootCaFile)
 	if err := colExecutor.Start(); err != nil {
 		return fmt.Errorf("start collectionSync failed: %v", err)
 	}
@@ -544,6 +550,8 @@ func (syncer *DBSyncer) splitSync(reader *DocumentReader, colExecutor *Collectio
 			}
 		}
 
+		// todo 这里转换成kafka Message
+
 		buffer = append(buffer, &doc)
 		bufferByteSize += len(doc)
 	}
@@ -556,6 +564,9 @@ func (syncer *DBSyncer) splitSync(reader *DocumentReader, colExecutor *Collectio
 
 /************************************************************************/
 // restful api
+
+const full = "full"
+
 func (syncer *DBSyncer) RestAPI() {
 	// progress api
 	type OverviewInfo struct {
@@ -566,6 +577,52 @@ func (syncer *DBSyncer) RestAPI() {
 		WaitCollection       int               `json:"wait_collection_number"`       // wait start
 		CollectionMetric     map[string]string `json:"collection_metric"`            // collection_name -> process
 	}
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			var totalCol float64
+			colStatusMap := map[string]float64{
+				"wait":       0,
+				"processing": 0,
+				"finished":   0,
+			}
+
+			syncer.metricNsMapLock.Lock()
+			totalCol = float64(len(syncer.metricNsMap))
+			for ns, collectionMetric := range syncer.metricNsMap {
+				nsStr := ns.Str()
+				percent, process, total := collectionMetric.PromMetric()
+				if total != 0 {
+					utils.FulColPerRowProm.WithLabelValues(full, nsStr).Set(percent)
+					utils.FulColProRowProm.WithLabelValues(full, nsStr).Set(process)
+					utils.FulColTotRowProm.WithLabelValues(full, nsStr).Set(total)
+				}
+
+				switch collectionMetric.CollectionStatus {
+				case StatusWaitStart:
+					colStatusMap["wait"] += 1
+				case StatusProcessing:
+					colStatusMap["processing"] += 1
+				case StatusFinish:
+					colStatusMap["finished"] += 1
+				}
+			}
+			syncer.metricNsMapLock.Unlock()
+
+			if totalCol == 0 {
+				utils.FulProgressProm.WithLabelValues(full).Set(100)
+			} else {
+				utils.FulProgressProm.WithLabelValues(full).Set(colStatusMap["finished"] / totalCol * 100)
+			}
+			utils.FulColNumProm.WithLabelValues(full).Set(totalCol)
+			utils.FulFinColNumProm.WithLabelValues(full).Set(colStatusMap["finished"])
+			utils.FulProColNumProm.WithLabelValues(full).Set(colStatusMap["processing"])
+			utils.FulWaitColNumProm.WithLabelValues(full).Set(colStatusMap["wait"])
+		}
+	}()
 
 	utils.FullSyncHttpApi.RegisterAPI("/progress", nimo.HttpGet, func([]byte) interface{} {
 		ret := OverviewInfo{
@@ -596,7 +653,4 @@ func (syncer *DBSyncer) RestAPI() {
 
 		return ret
 	})
-
-	/***************************************************/
-
 }

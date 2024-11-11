@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"fmt"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"time"
@@ -38,7 +39,7 @@ const (
 )
 
 type OplogHandler interface {
-	// invocation on every oplog consumed
+	// Handle invocation on every oplog consumed
 	Handle(log *oplog.PartialLog)
 }
 
@@ -91,6 +92,7 @@ type OplogSyncer struct {
 	shutdownWorking bool // shutdown routine starts?
 }
 
+// NewOplogSyncer
 /*
  * Syncer is used to fetch oplog from source MongoDB and then send to different workers which can be seen as
  * a network sender. There are several syncer coexist to improve the fetching performance.
@@ -176,7 +178,7 @@ func (sync *OplogSyncer) String() string {
 	return fmt.Sprintf("Syncer[%s]", sync.Replset)
 }
 
-// bind different worker
+// Bind different worker
 func (sync *OplogSyncer) Bind(w *Worker) {
 	sync.batcher.workerGroup = append(sync.batcher.workerGroup, w)
 }
@@ -185,7 +187,7 @@ func (sync *OplogSyncer) StartDiskApply() {
 	sync.persister.SetFetchStage(utils.FetchStageStoreDiskApply)
 }
 
-// start to polling oplog
+// Start to polling oplog
 func (sync *OplogSyncer) Start() {
 	LOG.Info("%s poll oplog syncer start. ckpt_interval[%dms], gid[%s], shard_key[%s]",
 		sync, conf.Options.CheckpointInterval, conf.Options.IncrSyncOplogGIDS, conf.Options.IncrSyncShardKey)
@@ -225,6 +227,10 @@ func (sync *OplogSyncer) Start() {
 		LOG.Warn("%s polling yield. master:%t, yield:%dms", sync, quorum.IsMaster(), DurationTime)
 		utils.YieldInMs(DurationTime)
 	}
+}
+
+func (sync *OplogSyncer) PersistStage() int32 {
+	return sync.persister.GetFetchStage()
 }
 
 // fetch all oplog from logs queue, batched together and then send to different workers.
@@ -282,7 +288,9 @@ func (sync *OplogSyncer) startBatcher() {
 			sync.CanClose = true
 			LOG.Info("%s blocking and waiting exits, checkpoint: %v", sync, utils.ExtractTimestampForLog(newestTs))
 			select {} // block forever, wait outer routine exits
-		} else if log, filterLog := batcher.getLastOplog(); log != nil && !allEmpty {
+		}
+
+		if log, filterLog := batcher.getLastOplog(); log != nil && !allEmpty {
 			// if all filtered, still update checkpoint
 			newestTs = utils.TimeStampToInt64(log.Timestamp)
 
@@ -343,6 +351,7 @@ func (sync *OplogSyncer) startBatcher() {
 
 			filterFlag = false
 
+			// todo log must be nil here, why do this condition?
 			if log != nil {
 				newestTsLog := utils.ExtractTimestampForLog(newestTs)
 				if newestTs < utils.TimeStampToInt64(log.Timestamp) {
@@ -351,8 +360,8 @@ func (sync *OplogSyncer) startBatcher() {
 				}
 
 				LOG.Info("%s waiting last checkpoint[%v] updated", sync, newestTsLog)
-				// check last checkpoint updated
 
+				// check last checkpoint updated
 				status := sync.checkCheckpointUpdate(true, utils.TimeStampToInt64(log.Timestamp))
 				LOG.Info("%s last checkpoint[%v] updated [%v]", sync, newestTsLog, status)
 			} else {
@@ -414,7 +423,7 @@ func (sync *OplogSyncer) checkCheckpointUpdate(barrier bool, newestTs int64) boo
 
 // how many pending queue we create
 func calculatePendingQueueConcurrency() int {
-	// single {pending|logs}queue while it'is multi source shard
+	// single {pending|logs}queue while it's multi source shard
 	// need more thread when fetching method is change stream, no matter replica or sharding.
 	if conf.Options.IncrSyncMongoFetchMethod == utils.VarIncrSyncMongoFetchMethodChangeStream {
 		return PipelineQueueMaxNr
@@ -429,8 +438,8 @@ func calculatePendingQueueConcurrency() int {
 // deserializer: fetch oplog from pending queue, parsed and then add into logs queue.
 func (sync *OplogSyncer) startDeserializer() {
 	parallel := calculatePendingQueueConcurrency()
-	sync.PendingQueue = make([]chan [][]byte, parallel, parallel)
-	sync.logsQueue = make([]chan []*oplog.GenericOplog, parallel, parallel)
+	sync.PendingQueue = make([]chan [][]byte, parallel)
+	sync.logsQueue = make([]chan []*oplog.GenericOplog, parallel)
 	for index := 0; index != len(sync.PendingQueue); index++ {
 		sync.PendingQueue[index] = make(chan [][]byte, PipelineQueueLen)
 		sync.logsQueue[index] = make(chan []*oplog.GenericOplog, PipelineQueueLen)
@@ -463,15 +472,16 @@ func (sync *OplogSyncer) deserializer(index int) {
 	if conf.Options.IncrSyncMongoFetchMethod == utils.VarIncrSyncMongoFetchMethodChangeStream &&
 		conf.Options.Tunnel != utils.VarTunnelDirect &&
 		!(conf.Options.Tunnel == utils.VarTunnelKafka &&
-			conf.Options.TunnelMessage == utils.VarTunnelMessageJson) {
+			(conf.Options.TunnelMessage == utils.VarTunnelMessageJson || conf.Options.TunnelMessage == utils.VarTunnelMessageCanalJson)) {
 		// very time consuming!
 		combiner = func(raw []byte, log *oplog.PartialLog) *oplog.GenericOplog {
-			if out, err := bson.Marshal(log.ParsedLog); err != nil {
+			out, err := bson.Marshal(log.ParsedLog)
+			if err != nil {
 				LOG.Crashf("%s deserializer marshal[%v] failed: %v", sync, log.ParsedLog, err)
 				return nil
-			} else {
-				return &oplog.GenericOplog{Raw: out, Parsed: log}
 			}
+
+			return &oplog.GenericOplog{Raw: out, Parsed: log}
 		}
 	} else {
 		combiner = func(raw []byte, log *oplog.PartialLog) *oplog.GenericOplog {
@@ -511,7 +521,7 @@ func (sync *OplogSyncer) poll() {
 	// happens frequently. so we simply reload.
 	checkpoint, _, err := sync.ckptManager.Get()
 	if err != nil {
-		// we doesn't continue working on ckpt fetched failed. because we should
+		// we don't continue working on ckpt fetched failed. because we should
 		// confirm the exist checkpoint value or exactly knows that it doesn't exist
 		LOG.Critical("%s Acquire the existing checkpoint from remote[%s %s.%s] failed !", sync,
 			conf.Options.CheckpointStorage, conf.Options.CheckpointStorageDb,
@@ -545,11 +555,11 @@ func (sync *OplogSyncer) next() bool {
 		sync.replMetric.SetOplogMax(payload)
 		sync.replMetric.SetOplogAvg(payload)
 		sync.replMetric.ReplStatus.Clear(utils.FetchBad)
-	} else if err == sourceReader.CollectionCappedError {
+	} else if errors.Is(err, sourceReader.CollectionCappedError) {
 		LOG.Error("%s oplog collection capped error, users should fix it manually", sync)
 		utils.YieldInMs(DurationTime)
 		return false
-	} else if err != nil && err != sourceReader.TimeoutError {
+	} else if err != nil && !errors.Is(err, sourceReader.TimeoutError) {
 		LOG.Error("%s %s internal error: %v", sync, sync.reader.Name(), err)
 		// error is nil indicate that only timeout incur syncer.next()
 		// return false. so we regardless that

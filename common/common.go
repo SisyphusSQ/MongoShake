@@ -45,7 +45,7 @@ var (
 
 func init() {
 	// prepare global folders
-	Mkdirs(GlobalDiagnosticPath /*, GlobalStoragePath*/)
+	_ = Mkdirs(GlobalDiagnosticPath /*, GlobalStoragePath*/)
 }
 
 func RunStatusMessage(status uint64) string {
@@ -142,6 +142,7 @@ func DelayFor(ms int64) {
 	YieldInMs(ms)
 }
 
+// BlockMongoUrlPassword
 /**
  * block password in mongo_urls:
  * two kind mongo_urls:
@@ -182,7 +183,7 @@ func BlockMongoUrlPassword(url, replace string) string {
 	return string(newUrl)
 }
 
-// marshal given struct by json
+// MarshalStruct given struct by json
 func MarshalStruct(input interface{}) string {
 	ret, err := json.Marshal(input)
 	if err != nil {
@@ -195,7 +196,7 @@ func DuplicateKey(err error) bool {
 	return mongo.IsDuplicateKeyError(err)
 }
 
-// Return true only Indexe only have key _id
+// HaveIdIndexKey Return true only Indexe only have key _id
 func HaveIdIndexKey(obj bson.D) bool {
 	for _, ele := range obj {
 		if ele.Key != "key" {

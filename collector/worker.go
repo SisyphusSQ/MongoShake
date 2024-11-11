@@ -186,7 +186,7 @@ func (worker *Worker) transfer(batch []*oplog.GenericOplog) {
 		}
 		replyAndAcked := worker.writeController.Send(logs, tag)
 
-		LOG.Info("%s transfer retransmit:%t send [%d] logs. reply_acked [%v], list_unack [%d] ",
+		LOG.Info("%s transfer retransmit: %t send [%d] logs. reply_acked [%v], list_unack [%d] ",
 			worker, worker.retransmit, len(logs), utils.ExtractTimestampForLog(replyAndAcked), len(worker.listUnACK))
 
 		switch {

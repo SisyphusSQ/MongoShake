@@ -141,8 +141,7 @@ func (coordinator *ReplicationCoordinator) isCheckpointExist() (bool, interface{
 }
 
 // if the oplog of checkpoint timestamp exist in all source db, then only do oplog replication instead of document replication
-func (coordinator *ReplicationCoordinator) selectSyncMode(syncMode string) (string, map[string]int64,
-	interface{}, error) {
+func (coordinator *ReplicationCoordinator) selectSyncMode(syncMode string) (string, map[string]int64, interface{}, error) {
 	if syncMode != utils.VarSyncModeAll && syncMode != utils.VarSyncModeIncr {
 		return syncMode, nil, int64(0), nil
 	}
@@ -185,7 +184,11 @@ func (coordinator *ReplicationCoordinator) selectSyncMode(syncMode string) (stri
 	} else if syncMode == utils.VarSyncModeIncr || conf.Options.Tunnel != utils.VarTunnelDirect {
 		// bugfix v2.4.11: if can not run incr sync directly, return error when sync_mode == "incr"
 		// bugfix v2.4.12: return error when tunnel != "direct"
-		return "", nil, int64(0), fmt.Errorf("start time illegal, can't run incr sync")
+		if conf.Options.Tunnel != utils.VarTunnelKafka && conf.Options.TunnelMessage != utils.VarTunnelMessageCanalJson {
+			return "", nil, int64(0), fmt.Errorf("start time illegal, can't run incr sync")
+		} else {
+			return utils.VarSyncModeAll, nil, smallestNewTs, nil
+		}
 	} else {
 		return utils.VarSyncModeAll, nil, smallestNewTs, nil
 	}

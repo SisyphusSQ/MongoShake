@@ -5,12 +5,14 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"math"
 	"sync/atomic"
 	"time"
 
 	"github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/common"
+	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/alibaba/MongoShake/v2/tunnel/kafka"
 
 	LOG "github.com/vinllen/log4go"
@@ -30,20 +32,22 @@ var (
 )
 
 type outputLog struct {
+	ns    string
 	isEnd bool
 	log   []byte
 }
 
 type KafkaWriter struct {
-	RemoteAddr  string
-	PartitionId int               // write to which partition
-	writer      *kafka.SyncWriter // writer
-	state       int64             // state: ok, error
-	encoderNr   int64             // how many encoder
-	inputChan   []chan *WMessage  // each encoder has 1 inputChan
-	outputChan  []chan outputLog  // output chan length
-	pushIdx     int64             // push into which encoder
-	popIdx      int64             // pop from which encoder
+	RemoteAddr   string
+	MaxPartition int
+	PartitionId  int                // write to which partition
+	writer       *kafka.AsyncWriter // writer
+	state        int64              // state: ok, error
+	encoderNr    int64              // how many encoder
+	inputChan    []chan *WMessage   // each encoder has 1 inputChan
+	outputChan   []chan outputLog   // output chan length
+	pushIdx      int64              // push into which encoder
+	popIdx       int64              // pop from which encoder
 }
 
 func (tunnel *KafkaWriter) Name() string {
@@ -51,10 +55,13 @@ func (tunnel *KafkaWriter) Name() string {
 }
 
 func (tunnel *KafkaWriter) Prepare() bool {
-	var writer *kafka.SyncWriter
-	var err error
+	var (
+		err    error
+		writer *kafka.AsyncWriter
+	)
+
 	if !unitTestWriteKafkaFlag && conf.Options.IncrSyncTunnelKafkaDebug == "" {
-		writer, err = kafka.NewSyncWriter(conf.Options.TunnelMongoSslRootCaFile, tunnel.RemoteAddr, tunnel.PartitionId)
+		writer, err = kafka.NewAsyncWriter(conf.Options.TunnelMongoSslRootCaFile, tunnel.RemoteAddr)
 		if err != nil {
 			LOG.Critical("KafkaWriter prepare[%v] create writer error[%v]", tunnel.RemoteAddr, err)
 			return false
@@ -100,7 +107,7 @@ func (tunnel *KafkaWriter) Send(message *WMessage) int64 {
 	return 0
 }
 
-// KafkaWriter.AckRequired() is always false, return 0 directly
+// AckRequired is always false, return 0 directly
 func (tunnel *KafkaWriter) AckRequired() bool {
 	return false
 }
@@ -116,16 +123,83 @@ func (tunnel *KafkaWriter) String() string {
 func (tunnel *KafkaWriter) encode(id int) {
 	for message := range tunnel.inputChan[id] {
 		message.Tag |= MsgPersistent
+		ns := message.ParsedLogs[0].Namespace
 
 		switch conf.Options.TunnelMessage {
 		case utils.VarTunnelMessageBson:
 			// write the raw oplog directly
 			for i, log := range message.RawLogs {
 				tunnel.outputChan[id] <- outputLog{
+					ns:    ns,
 					isEnd: i == len(log)-1,
 					log:   log,
 				}
 			}
+
+		case utils.VarTunnelMessageCanalJson:
+			for i, log := range message.ParsedLogs {
+				var (
+					err    error
+					encode []byte
+				)
+
+				ev := oplog.CanalEvent{
+					Timestamp: int64(log.Timestamp.T) * 1000,
+					Namespace: log.Namespace,
+					RAG:       conf.Options.RAG,
+				}
+
+				switch log.Operation {
+				case "i":
+					ev.EventType = "INSERT"
+				case "u":
+					ev.EventType = "UPDATE"
+				case "d":
+					ev.EventType = "DELETE"
+				default:
+					LOG.Debug("this operation[%s] didn't support", log.Operation)
+					continue
+				}
+
+				if ev.EventType == "DELETE" {
+					// 一般来说，应该只有 "_id"
+					ev.RowBefore = log.Object.Map()
+				} else {
+					// insert or update
+					if ev.EventType == "UPDATE" {
+						ev.PK = log.Query.Map()
+					}
+
+					ev.RowAfter = log.Object.Map()
+
+					// transform bson.D to bson.M
+					for _, k := range []string{"$set", "$unset"} {
+						if res := transformD2M(ev.RowAfter, k); res != nil {
+							ev.RowAfter[k] = res
+						}
+					}
+				}
+
+				encode, err = json.Marshal(ev)
+				if err != nil {
+					if strings.Contains(err.Error(), "unsupported value:") {
+						LOG.Error("%s json marshal data[%v] meets unsupported value[%v], skip current oplog",
+							tunnel, log.ParsedLog, err)
+						continue
+					} else {
+						// should panic
+						LOG.Crashf("%s json marshal data[%v] error[%v]", tunnel, log.ParsedLog, err)
+						tunnel.state = ReplyServerFault
+					}
+				}
+
+				tunnel.outputChan[id] <- outputLog{
+					ns:    ns,
+					isEnd: i == len(message.ParsedLogs)-1,
+					log:   encode,
+				}
+			}
+
 		case utils.VarTunnelMessageJson:
 			for i, log := range message.ParsedLogs {
 				// json marshal
@@ -156,10 +230,12 @@ func (tunnel *KafkaWriter) encode(id int) {
 				}
 
 				tunnel.outputChan[id] <- outputLog{
+					ns:    ns,
 					isEnd: i == len(message.ParsedLogs)-1,
 					log:   encode,
 				}
 			}
+
 		case utils.VarTunnelMessageRaw:
 			byteBuffer := bytes.NewBuffer([]byte{})
 			// checksum
@@ -179,6 +255,7 @@ func (tunnel *KafkaWriter) encode(id int) {
 				binary.Write(byteBuffer, binary.BigEndian, log)
 
 				tunnel.outputChan[id] <- outputLog{
+					ns:    ns,
 					isEnd: i == len(message.ParsedLogs)-1,
 					log:   byteBuffer.Bytes(),
 				}
@@ -192,8 +269,11 @@ func (tunnel *KafkaWriter) encode(id int) {
 
 func (tunnel *KafkaWriter) writeKafka() {
 	// debug
-	var debugF *os.File
-	var err error
+	var (
+		err    error
+		debugF *os.File
+	)
+
 	if conf.Options.IncrSyncTunnelKafkaDebug != "" {
 		fileName := fmt.Sprintf("%s-%d", conf.Options.IncrSyncTunnelKafkaDebug, tunnel.PartitionId)
 		if _, err := os.Stat(fileName); os.IsNotExist(err) {
@@ -210,6 +290,7 @@ func (tunnel *KafkaWriter) writeKafka() {
 
 	for {
 		tunnel.popIdx = (tunnel.popIdx + 1) % tunnel.encoderNr
+
 		// read chan
 		for data := range tunnel.outputChan[tunnel.popIdx] {
 			if unitTestWriteKafkaFlag {
@@ -222,7 +303,8 @@ func (tunnel *KafkaWriter) writeKafka() {
 				debugF.Write([]byte{10})
 			} else {
 				for {
-					if err = tunnel.writer.SimpleWrite(data.log); err != nil {
+					pid := int32(int(crc32.ChecksumIEEE([]byte(data.ns))) % conf.Options.TunnelKafkaPartitionNumber)
+					if err = tunnel.writer.Send(data.log, pid); err != nil {
 						LOG.Error("%s send [%v] with type[%v] error[%v]", tunnel, tunnel.RemoteAddr,
 							conf.Options.TunnelMessage, err)
 
@@ -239,4 +321,15 @@ func (tunnel *KafkaWriter) writeKafka() {
 			}
 		}
 	}
+}
+
+func transformD2M(row map[string]any, key string) any {
+	if _, ok := row[key]; ok {
+		ds, o := row[key].(bson.D)
+		if o {
+			return ds.Map()
+		}
+	}
+
+	return nil
 }

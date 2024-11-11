@@ -99,10 +99,12 @@ func (compressor *Compressor) Install() bool {
 }
 
 func (compressor *Compressor) Handle(message *tunnel.WMessage) int64 {
-	var originSize, compressedSize = 0, 0
+	var originSize, compressedSize int
+
 	// compress log entry data
 	if len(message.RawLogs) != 0 {
-		compressed := [][]byte{}
+		var compressed [][]byte
+
 		// every log entry compress
 		for _, log := range message.RawLogs {
 			originSize += len(log)

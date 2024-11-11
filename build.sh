@@ -64,11 +64,16 @@ goos=(linux darwin windows)
 
 if [ "$1" = linux ] ; then
 	goos=(linux)
+	export GOARCH=amd64
+fi
+
+if [ "$1" = darwin ] ; then
+	goos=(darwin)
+	export GOARCH=arm64
 fi
 
 for g in "${goos[@]}"; do
     export GOOS=$g
-    export GOARCH=amd64
     echo "try build goos=$g"
     if [ $g != "windows" ]; then
         build_info="$info -X $modulename/common.SIGNALPROFILE=31 -X $modulename/common.SIGNALSTACK=30"
@@ -78,13 +83,13 @@ for g in "${goos[@]}"; do
 
     for i in "${modules[@]}" ; do
         echo "Build ""$i"
-        
+
         # fetch all files in the main directory
         cd "$SCRIPT_DIR"
         cd "cmd/$i"
 
         bin_name=$i.$g
-        if [ "$1" = linux ] ; then
+        if [ "$1" = linux ] || [ "$1" = darwin ]; then
 	        bin_name=$i
         fi
 
@@ -96,14 +101,14 @@ for g in "${goos[@]}"; do
         fi
 
         # execute and show compile messages
-        if [ -f ${output}/"$i" ];then
-            ${output}/"$i"
-        fi
+#        if [ -f "${output}"/"$i" ];then
+#            ${output}/"$i"
+#        fi
     done
     echo "build $g successfully!"
 done
 
-if [ "$1" = linux ] ; then
+if [ "$1" = linux ] || [ "$1" = darwin ]; then
 	exit 0
 fi
 

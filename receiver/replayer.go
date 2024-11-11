@@ -43,6 +43,7 @@ func NewExampleReplayer(id int) *ExampleReplayer {
 	return er
 }
 
+// Sync
 /*
  * Receiver message and do the following steps:
  * 1. if we need re-transmit, this log will be discard

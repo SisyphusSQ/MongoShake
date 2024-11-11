@@ -21,6 +21,7 @@ const (
 	OplogFromMigrateName = "fromMigrate"
 )
 
+// Event
 /*
  * example:
 	{

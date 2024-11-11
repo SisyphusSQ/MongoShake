@@ -86,6 +86,8 @@ func (sync *OplogSyncer) checkpoint(flush bool, inputTs int64) {
 		LOG.Debug("do not repeat update checkpoint in %v milliseconds", conf.Options.CheckpointInterval)
 		return
 	}
+
+	// todo
 	// we force update the ckpt time even failed
 	sync.ckptTime = now
 	LOG.Info("checkpoint update sync.ckptTime to:%v", sync.ckptTime)

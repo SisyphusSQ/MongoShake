@@ -124,7 +124,7 @@ func (or *OplogReader) get() (log []byte, err error) {
 	}
 }
 
-// start fetcher if not exist
+// StartFetcher if not exist
 func (or *OplogReader) StartFetcher() {
 	if or.fetcherExist == true {
 		return
@@ -172,7 +172,7 @@ func (or *OplogReader) fetcher() {
 	}
 }
 
-// ensureNetwork establish the mongodb connection at first
+// EnsureNetwork establish the mongodb connection at first
 // if current connection is not ready or disconnected
 func (or *OplogReader) EnsureNetwork() (err error) {
 	if or.oplogsCursor != nil {

@@ -45,7 +45,7 @@ func (ms *MongoSource) String() string {
 	return fmt.Sprintf("url[%v], name[%v]", BlockMongoUrlPassword(ms.URL, "***"), ms.ReplicaName)
 }
 
-// get db version, return string with format like "3.0.1"
+// GetDBVersion , return string with format like "3.0.1"
 func GetDBVersion(conn *MongoCommunityConn) (string, error) {
 
 	res, err := conn.Client.Database("admin").

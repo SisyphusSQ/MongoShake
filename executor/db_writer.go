@@ -45,12 +45,13 @@ type BasicWriter interface {
 	doCommand(database string, metadata bson.M, oplogs []*OplogRecord) error
 }
 
-// oplog writer
+// NewDbWriter oplog writer
 func NewDbWriter(conn *utils.MongoCommunityConn, metadata bson.M, bulkInsert bool, fullFinishTs int64) BasicWriter {
 	if !bulkInsert { // bulk insertion disable
 		// LOG.Info("db writer create: SingleWriter")
 		return &SingleWriter{conn: conn, fullFinishTs: fullFinishTs}
-	} else if _, ok := metadata["g"]; ok { // has gid
+	} else if _, ok := metadata["g"]; ok {
+		// has gid
 		// LOG.Info("db writer create: CommandWriter")
 		return &CommandWriter{conn: conn, fullFinishTs: fullFinishTs}
 	}

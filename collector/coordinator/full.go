@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/collector/docsyncer"
@@ -59,11 +60,33 @@ func getTimestampMap(sources []*utils.MongoSource, sslRootFile string) (map[stri
 }
 
 func (coordinator *ReplicationCoordinator) startDocumentReplication() error {
+	var (
+		err              error
+		shardingChunkMap sharding.ShardingChunkMap
+		fromIsSharding   = coordinator.SourceIsSharding()
+	)
 
-	fromIsSharding := coordinator.SourceIsSharding()
+	LOG.Info("before do full sync, first check whether persist stage is...")
+	for range time.NewTicker(1 * time.Second).C {
+		var stage int32
+		for _, syncer := range coordinator.syncerGroup {
+			stage = syncer.PersistStage()
+			switch stage {
+			case utils.FetchStageStoreUnknown:
+				LOG.Info("in stage FetchStageStoreUnknown, waiting for flush...")
+				time.Sleep(500 * time.Millisecond)
+			case utils.FetchStageStoreDiskNoApply:
+				goto start
+			case utils.FetchStageStoreMemoryApply:
+				LOG.Info("in this stage[%v], skip full sync", utils.LogFetchStage(stage))
+				return nil
+			default:
+				LOG.Crashf("startDocumentReplication invalid fetch stage[%v]", utils.LogFetchStage(stage))
+			}
+		}
+	}
 
-	var shardingChunkMap sharding.ShardingChunkMap
-	var err error
+start:
 	// init orphan sharding chunk map if source is mongod(get data directly from mongod)
 	if fromIsSharding && coordinator.MongoS == nil {
 		LOG.Info("source is mongod, need to fetching chunk map")
@@ -96,8 +119,14 @@ func (coordinator *ReplicationCoordinator) startDocumentReplication() error {
 
 	// create target client
 	toUrl := conf.Options.TunnelAddress[0]
-	var toConn *utils.MongoCommunityConn
-	if !conf.Options.FullSyncExecutorDebug {
+	var (
+		toConn       *utils.MongoCommunityConn
+		trans        *transform.NamespaceTransform
+		shardingSync bool
+		indexMap     map[utils.NS][]bson.D
+	)
+
+	if !conf.Options.FullSyncExecutorDebug && !conf.Options.FullSyncKafkaSend {
 		if toConn, err = utils.NewMongoCommunityConn(toUrl, utils.VarMongoConnectModePrimary, true,
 			utils.ReadWriteConcernLocal, utils.ReadWriteConcernDefault, conf.Options.TunnelMongoSslRootCaFile); err != nil {
 			return err
@@ -105,16 +134,20 @@ func (coordinator *ReplicationCoordinator) startDocumentReplication() error {
 		defer toConn.Close()
 	}
 
+	if conf.Options.FullSyncKafkaSend {
+		goto SkipMongoPre
+	}
+
 	// create namespace transform
-	trans := transform.NewNamespaceTransform(conf.Options.TransformNamespace)
+	trans = transform.NewNamespaceTransform(conf.Options.TransformNamespace)
 
 	// drop target collection if possible
-	if err := docsyncer.StartDropDestCollection(nsSet, toConn, trans); err != nil {
+	if err = docsyncer.StartDropDestCollection(nsSet, toConn, trans); err != nil {
 		return err
 	}
 
 	// enable shard if sharding -> sharding
-	shardingSync := docsyncer.IsShardingToSharding(fromIsSharding, toConn)
+	shardingSync = docsyncer.IsShardingToSharding(fromIsSharding, toConn)
 	if shardingSync {
 		var connString string
 		if len(conf.Options.MongoSUrl) > 0 {
@@ -122,13 +155,12 @@ func (coordinator *ReplicationCoordinator) startDocumentReplication() error {
 		} else {
 			connString = conf.Options.MongoCsUrl
 		}
-		if err := docsyncer.StartNamespaceSpecSyncForSharding(connString, toConn, trans); err != nil {
+		if err = docsyncer.StartNamespaceSpecSyncForSharding(connString, toConn, trans); err != nil {
 			return err
 		}
 	}
 
 	// fetch all indexes
-	var indexMap map[utils.NS][]bson.D
 	if conf.Options.FullSyncCreateIndex != utils.VarFullSyncCreateIndexNone {
 		if indexMap, err = fetchIndexes(coordinator.RealSourceFullSync, filterList.IterateFilter); err != nil {
 			return fmt.Errorf("fetch index failed[%v]", err)
@@ -143,18 +175,22 @@ func (coordinator *ReplicationCoordinator) startDocumentReplication() error {
 		LOG.Info("index list above: ----------")
 
 		if conf.Options.FullSyncCreateIndex == utils.VarFullSyncCreateIndexBackground {
-			if err := docsyncer.StartIndexSync(indexMap, toUrl, trans, true); err != nil {
+			if err = docsyncer.StartIndexSync(indexMap, toUrl, trans, true); err != nil {
 				return fmt.Errorf("create background index failed[%v]", err)
 			}
 		}
 	}
 
-	// global qps limit, all dbsyncer share only 1 Qos
-	qos := utils.StartQoS(0, int64(conf.Options.FullSyncReaderDocumentBatchSize), &utils.FullSentinelOptions.TPS)
+SkipMongoPre:
+	// global qps limit, all dbSyncer share only 1 Qos
+	qos := utils.StartQoS(2000, int64(conf.Options.FullSyncReaderDocumentBatchSize), &utils.FullSentinelOptions.TPS)
 
 	// start sync each db
-	var wg sync.WaitGroup
-	var replError error
+	var (
+		wg        sync.WaitGroup
+		replError error
+	)
+
 	for i, src := range coordinator.RealSourceFullSync {
 		var orphanFilter *filter.OrphanFilter
 		if conf.Options.FullSyncExecutorFilterOrphanDocument && shardingChunkMap != nil {
@@ -199,7 +235,7 @@ func (coordinator *ReplicationCoordinator) startDocumentReplication() error {
 	}
 
 	// create index if == foreground
-	if conf.Options.FullSyncCreateIndex == utils.VarFullSyncCreateIndexForeground {
+	if conf.Options.FullSyncCreateIndex == utils.VarFullSyncCreateIndexForeground && !conf.Options.FullSyncKafkaSend {
 		if err := docsyncer.StartIndexSync(indexMap, toUrl, trans, false); err != nil {
 			return fmt.Errorf("create forground index failed[%v]", err)
 		}

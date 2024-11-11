@@ -48,7 +48,7 @@ type BatchGroupExecutor struct {
 	ReplayerId uint32
 	// mongo url
 	MongoUrl string
-	// tranform namespace
+	// transform namespace
 	NsTrans *transform.NamespaceTransform
 	// init sync finish timestamp
 	FullFinishTs int64
@@ -133,6 +133,7 @@ func (batchExecutor *BatchGroupExecutor) executeInParallel(logs []*OplogRecord) 
 	// shard oplogRecords by _id primary key and make up callback chain
 	var buffer = make([][]*OplogRecord, len(batchExecutor.executors))
 	shardKey := oplog.PrimaryKeyHasher{}
+
 	var completionList []func()
 	for _, log := range logs {
 		selected := shardKey.DistributeOplogByMod(log.original.partialLog, len(batchExecutor.executors))
@@ -142,6 +143,7 @@ func (batchExecutor *BatchGroupExecutor) executeInParallel(logs []*OplogRecord) 
 			completionList = append(completionList, log.original.callback)
 		}
 	}
+
 	for index, buf := range buffer {
 		if len(buf) != 0 {
 			nimo.AssertTrue(len(batchExecutor.executors[index].batchBlock) == 0, "executors buffer is not empty!")
@@ -152,12 +154,15 @@ func (batchExecutor *BatchGroupExecutor) executeInParallel(logs []*OplogRecord) 
 			batchExecutor.executors[index].batchBlock <- buf
 		}
 	}
+
 	// wait for execute completely
 	latch.Wait()
+
 	// invoke all callbacks
 	for _, callback := range completionList {
 		callback()
 	}
+
 	// sweep executors' block buffer and await
 	for _, exec := range batchExecutor.executors {
 		exec.finisher = nil

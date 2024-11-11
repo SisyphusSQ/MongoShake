@@ -184,7 +184,8 @@ func parseDocKeyValue(x interface{}) (string, interface{}, error) {
 }
 
 /*************************************************/
-// DocumentReader: the reader of single piece
+
+// DocumentReader : the reader of single piece
 type DocumentReader struct {
 	// source mongo address url
 	src           string
@@ -243,7 +244,7 @@ func (reader *DocumentReader) String() string {
 // NextDoc returns an document by raw bytes which is []byte
 // reader.docCursor.Current is valid only before next docCursor.Next(), So must be copy
 func (reader *DocumentReader) NextDoc() (doc bson.Raw, err error) {
-	if err := reader.ensureNetwork(); err != nil {
+	if err = reader.ensureNetwork(); err != nil {
 		return nil, err
 	}
 
@@ -251,7 +252,7 @@ func (reader *DocumentReader) NextDoc() (doc bson.Raw, err error) {
 	defer atomic.AddInt32(&reader.concurrency, -1)
 
 	if !reader.docCursor.Next(reader.ctx) {
-		if err := reader.docCursor.Err(); err != nil {
+		if err = reader.docCursor.Err(); err != nil {
 			reader.releaseCursor()
 			return nil, err
 		} else {

@@ -103,13 +103,13 @@ func (p *Persister) GetQueryTsFromDiskQueue() primitive.Timestamp {
 	}
 
 	if conf.Options.IncrSyncMongoFetchMethod == utils.VarIncrSyncMongoFetchMethodOplog {
-		log := new(oplog.PartialLog)
+		log := new(oplog.ParsedLog)
 		if err := bson.Unmarshal(logData, log); err != nil {
 			LOG.Crashf("unmarshal oplog[%v] failed[%v]", logData, err)
 		}
 
 		// assert
-		if log.Namespace == "" {
+		if log.Namespace == "" && log.Operation != "n" {
 			LOG.Crashf("unmarshal data to oplog failed: %v", log)
 		}
 		return log.Timestamp
@@ -128,12 +128,12 @@ func (p *Persister) GetQueryTsFromDiskQueue() primitive.Timestamp {
 	}
 }
 
-// inject data
+// Inject data
 func (p *Persister) Inject(input []byte) {
 	// only used to test the reader, discard anything
 	switch conf.Options.IncrSyncReaderDebug {
 	case utils.VarIncrSyncReaderDebugNone:
-		break
+		// do nothing
 	case utils.VarIncrSyncReaderDebugDiscard:
 		return
 	case utils.VarIncrSyncReaderDebugPrint:
@@ -141,7 +141,7 @@ func (p *Persister) Inject(input []byte) {
 		bson.Unmarshal(input, &test)
 		LOG.Info("print debug: %v", test)
 	default:
-		break
+		// do nothing
 	}
 
 	if p.enableDiskPersist {
@@ -156,10 +156,10 @@ func (p *Persister) Inject(input []byte) {
 			}
 
 			// store local
-			// TODO unlock?
 			p.diskQueueMutex.Lock()
-			if p.DiskQueue != nil { // double check
-				// should send to diskQueue
+			defer p.diskQueueMutex.Unlock()
+			if p.DiskQueue != nil {
+				// double check, if full and disk apply is finish, dishQueue should be nil
 				atomic.AddUint64(&p.diskWriteCount, 1)
 				if err := p.DiskQueue.Put(input); err != nil {
 					LOG.Crashf("persister inject replset[%v] put oplog to disk queue failed[%v]",
@@ -192,7 +192,7 @@ func (p *Persister) PushToPendingQueue(input []byte) {
 		selected := int(p.nextQueuePosition % uint64(len(p.sync.PendingQueue)))
 		p.sync.PendingQueue[selected] <- p.Buffer
 
-		// clear old Buffer, we shouldn't use "p.Buffer = p.Buffer[:0]" because these addres won't
+		// clear old Buffer, we shouldn't use "p.Buffer = p.Buffer[:0]" because these address won't
 		// be changed in the channel.
 		// p.Buffer = p.Buffer[:0]
 		p.Buffer = make([][]byte, 0, conf.Options.IncrSyncFetcherBufferCapacity)
@@ -203,24 +203,29 @@ func (p *Persister) PushToPendingQueue(input []byte) {
 }
 
 func (p *Persister) retrieve() {
-	for range time.NewTicker(3 * time.Second).C {
+	interval := time.NewTicker(3 * time.Second)
+	defer interval.Stop()
+	for range interval.C {
 		stage := atomic.LoadInt32(&p.fetchStage)
 		switch stage {
 		case utils.FetchStageStoreDiskApply:
-			break
-		case utils.FetchStageStoreUnknown:
+			goto apply
+		case utils.FetchStageStoreUnknown, utils.FetchStageStoreDiskNoApply:
 			// do nothing
-		case utils.FetchStageStoreDiskNoApply:
-			// do nothing
+		case utils.FetchStageStoreMemoryApply:
+			LOG.Info("stage[%v] no need to apply data", utils.LogFetchStage(stage))
+			return
 		default:
 			LOG.Crashf("invalid fetch stage[%v]", utils.LogFetchStage(stage))
 		}
 	}
 
+apply:
 	LOG.Info("persister retrieve for replset[%v] begin to read from disk queue with depth[%v]",
 		p.replset, p.DiskQueue.Depth())
 	ticker := time.NewTicker(time.Second)
-Loop:
+	defer ticker.Stop()
+
 	for {
 		select {
 		case readData := <-p.DiskQueue.ReadChan():
@@ -240,11 +245,12 @@ Loop:
 		case <-ticker.C:
 			// check no more data batching?
 			if p.DiskQueue.Depth() < p.DiskQueue.BatchCount() {
-				break Loop
+				goto finish
 			}
 		}
 	}
 
+finish:
 	LOG.Info("persister retrieve for replset[%v] block fetch with disk queue depth[%v]",
 		p.replset, p.DiskQueue.Depth())
 
@@ -266,17 +272,23 @@ Loop:
 			LOG.Crash(err)
 		}
 	}
+
 	if p.DiskQueue.Depth() != 0 {
 		LOG.Crashf("persister retrieve for replset[%v] finish, but disk queue depth[%v] is not empty",
 			p.replset, p.DiskQueue.Depth())
 	}
-	p.SetFetchStage(utils.FetchStageStoreMemoryApply)
 
+	p.SetFetchStage(utils.FetchStageStoreMemoryApply)
 	if err := p.DiskQueue.Delete(); err != nil {
 		LOG.Critical("persister retrieve for replset[%v] close disk queue error. %v", p.replset, err)
 	}
+	// clean p.DiskQueue
+	p.DiskQueue = nil
+
 	LOG.Info("persister retriever for replset[%v] exits", p.replset)
 }
+
+const opOnDisk = "oplog_on_disk"
 
 func (p *Persister) RestAPI() {
 	type PersistNode struct {
@@ -287,6 +299,28 @@ func (p *Persister) RestAPI() {
 		DiskWriteCount    uint64 `json:"disk_write_count"`
 		DiskReadCount     uint64 `json:"disk_read_count"`
 	}
+
+	go func() {
+		var enable float64 = 0
+		if p.enableDiskPersist {
+			enable = 1
+		}
+
+		capacity := float64(conf.Options.IncrSyncFetcherBufferCapacity)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			utils.DiskEnableDiskPersist.WithLabelValues(opOnDisk).Set(enable)
+			if p.enableDiskPersist {
+				utils.DiskBufferSize.WithLabelValues(opOnDisk).Set(capacity)
+				utils.DiskBufferUsed.WithLabelValues(opOnDisk).Set(float64(len(p.Buffer)))
+				utils.DiskFetchStage.WithLabelValues(opOnDisk, utils.LogFetchStage(p.GetFetchStage())).Set(float64(time.Now().UnixMilli()))
+				utils.DiskWriteCount.WithLabelValues(opOnDisk).Add(float64(p.diskWriteCount))
+				utils.DiskReadCount.WithLabelValues(opOnDisk).Add(float64(p.diskReadCount))
+			}
+		}
+	}()
 
 	utils.IncrSyncHttpApi.RegisterAPI("/persist", nimo.HttpGet, func([]byte) interface{} {
 		return &PersistNode{

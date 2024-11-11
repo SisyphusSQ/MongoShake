@@ -5,20 +5,26 @@ import (
 	"crypto/x509"
 	"fmt"
 	LOG "github.com/vinllen/log4go"
-	"io/ioutil"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/Shopify/sarama"
 	utils "github.com/alibaba/MongoShake/v2/common"
+
+	"github.com/IBM/sarama"
+	prometheusmetrics "github.com/deathowl/go-metrics-prometheus"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rcrowley/go-metrics"
 )
 
 var (
-	topicDefault           = "mongoshake"
-	topicSplitter          = "@"
-	brokersSplitter        = ","
-	defaultPartition int32 = 0
+	nsDefault                = "mongoshake"
+	topicDefault             = "mongoshake"
+	topicSplitter            = "@"
+	brokersSplitter          = ","
+	defaultPartition   int32 = 0
+	metricsRegistry          = metrics.NewRegistry()
+	prometheusRegistry       = prometheus.DefaultRegisterer
 )
 
 type Message struct {
@@ -34,20 +40,26 @@ type Config struct {
 
 func NewConfig(rootCaFile string) (*Config, error) {
 	config := sarama.NewConfig()
-	config.Version = sarama.V0_10_0_0
-	config.MetricRegistry = metrics.NewRegistry()
+	config.Version = sarama.V2_2_0_0
+	config.MetricRegistry = metricsRegistry
 
 	config.Producer.Return.Errors = true
 	config.Producer.Return.Successes = true
 	config.Producer.Partitioner = sarama.NewManualPartitioner
 	config.Producer.MaxMessageBytes = 16*utils.MB + 2*utils.MB // 2MB for the reserve gap
 
+	// for async
+	config.Producer.Flush.Frequency = 1 * time.Second
+	config.Producer.Flush.MaxMessages = 1000
+	config.Producer.RequiredAcks = sarama.WaitForLocal
+	config.Producer.Timeout = 10 * time.Second
+
 	// ssl
 	if rootCaFile != "" {
 		sslConfig := &tls.Config{
 			InsecureSkipVerify: true,
 		}
-		caCert, err := ioutil.ReadFile(rootCaFile)
+		caCert, err := os.ReadFile(rootCaFile)
 		if err != nil {
 			LOG.Critical("failed to load the ca cert file[%s]: %s failed: %s", rootCaFile, err.Error())
 			return nil, err
@@ -58,6 +70,9 @@ func NewConfig(rootCaFile string) (*Config, error) {
 		config.Net.TLS.Config = sslConfig
 		config.Net.TLS.Enable = true
 	}
+
+	pClient := prometheusmetrics.NewPrometheusProvider(metricsRegistry, nsDefault, "", prometheusRegistry, 1*time.Second)
+	go pClient.UpdatePrometheusMetrics()
 
 	return &Config{
 		Config: config,

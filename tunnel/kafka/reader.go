@@ -1,7 +1,7 @@
 package kafka
 
 import (
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
 )
 
 type Reader struct {
@@ -26,6 +26,7 @@ func NewReader(address string) (*Reader, error) {
 		return nil, err
 	}
 
+	// todo why not use consumer group?
 	// pay attention: we fetch data from oldest offset when starting by default, so a lot data will be
 	// replay when receiver restarts.
 	partitionConsumer, err := consumer.ConsumePartition(topic, defaultPartition, sarama.OffsetOldest)

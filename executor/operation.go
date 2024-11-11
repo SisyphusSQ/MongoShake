@@ -65,9 +65,11 @@ func (exec *Executor) execute(group *OplogsGroup) error {
 			return fmt.Errorf("Replay-%d network connection lost . we would retry for next connecting",
 				exec.batchExecutor.ReplayerId)
 		}
-		// just use the first log. they has the same metadata
+		// just use the first log. they have the same metadata
+		// metadata for ali cloud mongodb
 		metadata := buildMetadata(group.oplogRecords[0].original.partialLog)
 		hasIndex := strings.Contains(group.ns, "system.indexes")
+
 		// LOG.Debug("fullFinishTs: %v", utils.ExtractTimestampForLog(exec.batchExecutor.FullFinishTs))
 		dbWriter := NewDbWriter(exec.conn, metadata, exec.bulkInsert && !hasIndex, exec.batchExecutor.FullFinishTs)
 		var err error

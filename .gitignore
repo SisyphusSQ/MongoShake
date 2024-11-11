@@ -30,6 +30,7 @@ src/vendor/
 bin/
 /cmd/collector/collector
 /cmd/receiver/receiver
+
 conf/
-!conf/collector.conf
-!conf/receiver.conf
+
+venv/

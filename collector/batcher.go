@@ -179,7 +179,7 @@ func (batcher *Batcher) getBatch() []*oplog.GenericOplog {
 		batcher.moveToNextQueue()
 		for len(mergeBatch) < conf.Options.IncrSyncAdaptiveBatchingMaxSize &&
 			len(syncer.logsQueue[batcher.currentQueue()]) > 0 {
-			// there has more pushed oplogs in next logs queue (read can't to be block)
+			// there has more pushed oplogs in next logs queue (read can't to be blocked)
 			// Hence, we fetch them by the way. and merge together
 			mergeBatch = append(mergeBatch, <-syncer.logsQueue[batcher.nextQueue]...)
 			batcher.moveToNextQueue()
@@ -270,7 +270,7 @@ func (batcher *Batcher) getBatchWithDelay() ([]*oplog.GenericOplog, bool) {
 /**
  * this function is used to gather oplogs together.
  * honestly speaking, it's complicate so that reading unit tests may help you
- * to make it more clear. The reason this function is so complicate is there're
+ * to make it more clear. The reason this function is so complicate is there are
  * too much corner cases here.
  * return batched oplogs and barrier flag.
  * set barrier if find DDL.
@@ -323,7 +323,7 @@ func (batcher *Batcher) BatchMore() (genericOplogs [][]*oplog.GenericOplog, barr
 			continue
 		}
 
-		// Transactoin
+		// Transaction
 		if txnMeta, txnOk := batcher.isTransaction(genericLog.Parsed); txnOk {
 			//LOG.Info("~~~~~~~~~transaction %v %v", i, genericLog.Parsed)
 			isRet, mustIndividual, _, deliveredOps := batcher.handleTransaction(txnMeta, genericLog)
@@ -413,7 +413,8 @@ func (batcher *Batcher) setLastOplog() bool {
 
 // addIntoBatchGroup
 // isBarrier
-//     Barrier Oplogs(like DDL or Transaction) must execute sequentially and separately, send to batchGroup[0]
+//
+//	Barrier Oplogs(like DDL or Transaction) must execute sequentially and separately, send to batchGroup[0]
 func (batcher *Batcher) addIntoBatchGroup(genericLog *oplog.GenericOplog, isBarrier bool) {
 	if genericLog == fakeOplog {
 		return

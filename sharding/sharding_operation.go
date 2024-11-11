@@ -28,7 +28,7 @@ const (
 	RangedShard = "ranged"
 )
 
-// get balancer status from config server
+// GetBalancerStatusByUrl get balancer status from config server
 func GetBalancerStatusByUrl(csUrl string) (bool, error) {
 	var conn *utils.MongoCommunityConn
 	var err error
@@ -65,7 +65,7 @@ type ShardCollection struct {
 	ShardType string
 }
 
-// {replset: {namespace: []ChunkRange} }
+// ShardingChunkMap {replset: {namespace: []ChunkRange} }
 type ShardingChunkMap map[string]map[string]*ShardCollection
 
 type DBChunkMap map[string]*ShardCollection
@@ -168,7 +168,7 @@ func GetChunkMapByUrl(csUrl string) (ShardingChunkMap, error) {
 	return chunkMap, nil
 }
 
-// input given namespace, return all keys and shard type(range or hashed)
+// GetColShardType input given namespace, return all keys and shard type(range or hashed)
 func GetColShardType(conn *utils.MongoCommunityConn, namespace string) ([]string, string, error) {
 	var colDoc bson.D
 	if err := conn.Client.Database(ConfigDB).Collection(CollectionCol).FindOne(context.Background(),

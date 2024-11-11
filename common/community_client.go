@@ -13,7 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
-	"io/ioutil"
+	"os"
 	"time"
 
 	LOG "github.com/vinllen/log4go"
@@ -26,7 +26,7 @@ type MongoCommunityConn struct {
 }
 
 func addCACertFromFile(cfg *tls.Config, file string) error {
-	data, err := ioutil.ReadFile(file)
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return err
 	}

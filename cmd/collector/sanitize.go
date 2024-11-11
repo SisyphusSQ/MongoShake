@@ -76,15 +76,22 @@ func checkDefaultValue() error {
 		conf.Options.Id = "mongoshake"
 	}
 
+	if conf.Options.MasterQuorum && conf.Options.MasterQuorumObjectId == "" {
+		return fmt.Errorf("master quorum object id is required")
+	}
+
 	if conf.Options.FullSyncHTTPListenPort <= 0 {
 		conf.Options.FullSyncHTTPListenPort = 9101
 	}
 	if conf.Options.IncrSyncHTTPListenPort <= 0 {
 		conf.Options.IncrSyncHTTPListenPort = 9100
 	}
-	if conf.Options.SystemProfilePort <= 0 {
-		conf.Options.SystemProfilePort = 9200
-	}
+
+	// if conf.Options.SystemProfilePort <= 0 disable profile port
+	/*
+		if conf.Options.SystemProfilePort <= 0 {
+			conf.Options.SystemProfilePort = 9200
+		}*/
 
 	if conf.Options.LogLevel == "" {
 		conf.Options.LogLevel = utils.VarLogLevelInfo
@@ -249,8 +256,9 @@ func checkDefaultValue() error {
 		conf.Options.TunnelMessage = utils.VarTunnelMessageRaw
 	} else if conf.Options.TunnelMessage != utils.VarTunnelMessageRaw &&
 		conf.Options.TunnelMessage != utils.VarTunnelMessageBson &&
-		conf.Options.TunnelMessage != utils.VarTunnelMessageJson {
-		return fmt.Errorf("incr_sync.tunnel.message in {raw, bson, json}")
+		conf.Options.TunnelMessage != utils.VarTunnelMessageJson &&
+		conf.Options.TunnelMessage != utils.VarTunnelMessageCanalJson {
+		return fmt.Errorf("incr_sync.tunnel.message in {raw, bson, json, canal_json}")
 	}
 	if conf.Options.IncrSyncExecutor <= 0 {
 		conf.Options.IncrSyncExecutor = 1
@@ -344,7 +352,7 @@ func checkConflict() error {
 		return fmt.Errorf("full_sync.http_port should not equal to incr_sync.http_port")
 	}
 
-	conf.Options.SystemProfilePort = utils.MayBeRandom(conf.Options.SystemProfilePort)
+	//conf.Options.SystemProfilePort = utils.MayBeRandom(conf.Options.SystemProfilePort)
 	// check mongo_cs_url
 	if conf.Options.MongoCsUrl == "" && len(conf.Options.MongoUrls) > 1 {
 		return fmt.Errorf("mongo_cs_url be config server address when source MongoDB is sharding")
@@ -418,10 +426,16 @@ func checkConflict() error {
 			conf.Options.TunnelKafkaPartitionNumber, conf.Options.IncrSyncWorker)
 	}
 	conf.Options.IncrSyncCollisionEnable = conf.Options.IncrSyncExecutor != 1
-	if conf.Options.Tunnel != utils.VarTunnelDirect &&
-		conf.Options.SyncMode != utils.VarSyncModeIncr {
-		return fmt.Errorf("full sync only support when tunnel type == direct")
+	if conf.Options.Tunnel != utils.VarTunnelDirect && conf.Options.SyncMode != utils.VarSyncModeIncr {
+		if conf.Options.Tunnel != utils.VarTunnelKafka && conf.Options.TunnelMessage != utils.VarTunnelMessageCanalJson {
+			return fmt.Errorf("full sync only support when tunnel type == direct or type == kafka and message == canal_json")
+		}
 	}
+
+	if conf.Options.Tunnel == utils.VarTunnelKafka && conf.Options.TunnelMessage == utils.VarTunnelMessageCanalJson {
+		conf.Options.FullSyncKafkaSend = true
+	}
+
 	// check source mongodb version >= 4.0 when change stream enable
 	if conf.Options.IncrSyncMongoFetchMethod == utils.VarIncrSyncMongoFetchMethodChangeStream {
 		if conf.Options.MongoSUrl == "" && len(conf.Options.MongoUrls) > 1 {

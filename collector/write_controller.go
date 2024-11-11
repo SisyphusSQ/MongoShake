@@ -24,12 +24,14 @@ type WriteController struct {
 type Module interface {
 	IsRegistered() bool
 
+	// Install
 	/**
 	 * Module install and initialize. return false on failed
 	 * and only invocation on WriteController is preparing
 	 */
 	Install() bool
 
+	// Handle
 	/**
 	 * Handle outstanding request message. and messages
 	 * are passed one by one. Any changes of message in
@@ -103,6 +105,7 @@ func (controller *WriteController) Send(logs []*oplog.GenericOplog, tag uint32) 
 		},
 		ParsedLogs: oplog.LogParsed(logs),
 	}
+
 	for _, m := range controller.moduleList {
 		if internalCode := m.Handle(message); internalCode < 0 {
 			return internalCode

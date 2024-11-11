@@ -2,13 +2,14 @@
 
 # -*- coding:utf-8 -*-
 
-import traceback
-import threading
-import random
-import pymongo
-import time
 import os
+import random
+import threading
+import time
+import traceback
 from random import Random
+
+import pymongo
 
 mongo_url = "mongodb://127.0.0.1:8001"
 mongo_database = "generator"
@@ -18,8 +19,9 @@ mark = 0
 
 init_schema_only = False
 
+
 def log_info(message):
-    print "[%s] %s " % (time.strftime('%Y-%m-%d %H:%M:%S'), message)
+    print("[%s] %s " % (time.strftime('%Y-%m-%d %H:%M:%S'), message))
 
 
 def random_string(randomlength=8):
@@ -64,9 +66,9 @@ def worker(collection, index):
                     collection.insert_many(batch)
                     batch = []
                 success.append(userId)
-            except Exception, e:
+            except Exception as e:
                 log_info("duplicated records insert %d.... just skip" % i)
-                print e
+                print(e)
 
         log_info("worker-%d finish filling phase")
 
@@ -74,11 +76,13 @@ def worker(collection, index):
         for i in range(0, times * 10):
             try:
                 n = random.randint(0, len(success))
-                collection.update({'userId': success[n]}, {'userId': success[n], 'firstName': "Michael_%i" % i, 'lastName': "Jorndan_%d" % (i * 13),
-                                                           'phone': 17711100000 + i, "info": {"col1": times + n, "col2": times + i * 3}})
-            except Exception, e:
+                collection.update({'userId': success[n]}, {'userId': success[n], 'firstName': "Michael_%i" % i,
+                                                           'lastName': "Jorndan_%d" % (i * 13),
+                                                           'phone': 17711100000 + i,
+                                                           "info": {"col1": times + n, "col2": times + i * 3}})
+            except Exception as e:
                 log_info("duplicated records update %d.... just skip" % i)
-                print e
+                print(e)
 
         log_info("worker-%d finish random updates")
         log_info("worker-%d complete job")
@@ -118,5 +122,5 @@ if __name__ == "__main__":
             globalLock.release()
             if quit:
                 break
-    except Exception, e:
+    except Exception as e:
         traceback.print_exc()

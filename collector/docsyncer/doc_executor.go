@@ -1,18 +1,23 @@
 package docsyncer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	LOG "github.com/vinllen/log4go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"sync/atomic"
 
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
-	"sync"
-
-	LOG "github.com/vinllen/log4go"
+	"github.com/alibaba/MongoShake/v2/oplog"
+	"github.com/alibaba/MongoShake/v2/tunnel/kafka"
 )
 
 var (
@@ -20,13 +25,19 @@ var (
 	GlobalDocExecutorId  int32 = -1
 )
 
+func GenerateDocExecutorId() int {
+	return int(atomic.AddInt32(&GlobalDocExecutorId, 1))
+}
+
 type CollectionExecutor struct {
 	// multi executor
-	executors []*DocExecutor
+	executors []RowExecutor
+
 	// worker id
 	id int
+
 	// mongo url
-	mongoUrl    string
+	url         string
 	sslRootFile string
 
 	ns utils.NS
@@ -46,10 +57,10 @@ func GenerateCollExecutorId() int {
 	return int(atomic.AddInt32(&GlobalCollExecutorId, 1))
 }
 
-func NewCollectionExecutor(id int, mongoUrl string, ns utils.NS, syncer *DBSyncer, sslRootFile string) *CollectionExecutor {
+func NewCollectionExecutor(id int, url string, ns utils.NS, syncer *DBSyncer, sslRootFile string) *CollectionExecutor {
 	return &CollectionExecutor{
 		id:          id,
-		mongoUrl:    mongoUrl,
+		url:         url,
 		sslRootFile: sslRootFile,
 		ns:          ns,
 		syncer:      syncer,
@@ -59,12 +70,12 @@ func NewCollectionExecutor(id int, mongoUrl string, ns utils.NS, syncer *DBSynce
 
 func (colExecutor *CollectionExecutor) Start() error {
 	var err error
-	if !conf.Options.FullSyncExecutorDebug {
+	if !conf.Options.FullSyncExecutorDebug && !conf.Options.FullSyncKafkaSend {
 		writeConcern := utils.ReadWriteConcernDefault
 		if conf.Options.FullSyncExecutorMajorityEnable {
 			writeConcern = utils.ReadWriteConcernMajority
 		}
-		if colExecutor.conn, err = utils.NewMongoCommunityConn(colExecutor.mongoUrl,
+		if colExecutor.conn, err = utils.NewMongoCommunityConn(colExecutor.url,
 			utils.VarMongoConnectModePrimary, true,
 			utils.ReadWriteConcernDefault, writeConcern,
 			colExecutor.sslRootFile); err != nil {
@@ -75,12 +86,20 @@ func (colExecutor *CollectionExecutor) Start() error {
 	parallel := conf.Options.FullSyncReaderWriteDocumentParallel
 	colExecutor.docBatch = make(chan []*bson.Raw, parallel)
 
-	executors := make([]*DocExecutor, parallel)
+	executors := make([]RowExecutor, parallel)
 	for i := 0; i != len(executors); i++ {
-		// Client is a handle representing a pool of connections, can be use by multi routines
+		// Client is a handle representing a pool of connections, can be used by multi routines
 		// You Can get one idle connection, if all is idle, then always get the same one
 		// connections pool default parameter(min_conn:0 max_conn:100 create_conn_once:2)
-		executors[i] = NewDocExecutor(GenerateDocExecutorId(), colExecutor, colExecutor.conn, colExecutor.syncer)
+		if conf.Options.FullSyncKafkaSend {
+			executors[i], err = NewMsgExecutor(GenerateCollExecutorId(), colExecutor, colExecutor.url, colExecutor.syncer)
+			if err != nil {
+				LOG.Error("generate kafka executor failed, %v", err)
+				return err
+			}
+		} else {
+			executors[i] = NewDocExecutor(GenerateDocExecutorId(), colExecutor, colExecutor.conn, colExecutor.syncer)
+		}
 		go executors[i].start()
 	}
 	colExecutor.executors = executors
@@ -110,16 +129,24 @@ func (colExecutor *CollectionExecutor) Wait() error {
 	}*/
 
 	close(colExecutor.docBatch)
-	if !conf.Options.FullSyncExecutorDebug {
+	if !conf.Options.FullSyncExecutorDebug && !conf.Options.FullSyncKafkaSend {
 		colExecutor.conn.Close()
 	}
 
 	for _, exec := range colExecutor.executors {
-		if exec.error != nil {
-			return errors.New(fmt.Sprintf("sync ns %v failed. %v", colExecutor.ns, exec.error))
+		if exec.Error() != nil {
+			return errors.New(fmt.Sprintf("sync ns %v failed. %v", colExecutor.ns, exec.Error()))
 		}
 	}
 	return nil
+}
+
+type RowExecutor interface {
+	String() string
+
+	start()
+
+	Error() error
 }
 
 type DocExecutor struct {
@@ -136,10 +163,6 @@ type DocExecutor struct {
 	syncer *DBSyncer
 }
 
-func GenerateDocExecutorId() int {
-	return int(atomic.AddInt32(&GlobalDocExecutorId, 1))
-}
-
 func NewDocExecutor(id int, colExecutor *CollectionExecutor, conn *utils.MongoCommunityConn,
 	syncer *DBSyncer) *DocExecutor {
 	return &DocExecutor{
@@ -152,6 +175,10 @@ func NewDocExecutor(id int, colExecutor *CollectionExecutor, conn *utils.MongoCo
 
 func (exec *DocExecutor) String() string {
 	return fmt.Sprintf("DocExecutor[%v] collectionExecutor[%v]", exec.id, exec.colExecutor.ns)
+}
+
+func (exec *DocExecutor) Error() error {
+	return exec.error
 }
 
 func (exec *DocExecutor) start() {
@@ -193,6 +220,7 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 			var docData bson.D
 			if err := bson.Unmarshal(*doc, &docData); err != nil {
 				LOG.Error("doSync do bson unmarshal %v failed. %v", doc, err)
+				continue
 			}
 			// judge whether is orphan document, pass if so
 			if exec.syncer.orphanFilter.Filter(docData, ns.Database+"."+ns.Collection) {
@@ -205,7 +233,7 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 	}
 
 	// qps limit if enable
-	if exec.syncer.qos.Limit > 0 {
+	if exec.syncer.qos != nil && exec.syncer.qos.Limit > 0 {
 		exec.syncer.qos.FetchBucket()
 	}
 
@@ -273,4 +301,142 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 	}
 
 	return nil
+}
+
+type MsgExecutor struct {
+	// sequence index id in each replayer
+	id int
+
+	// colExecutor, not owned
+	colExecutor *CollectionExecutor
+
+	error error
+
+	asyncer *kafka.AsyncWriter
+
+	// not own
+	syncer *DBSyncer
+}
+
+func NewMsgExecutor(id int, colExecutor *CollectionExecutor, kafkaUrl string, syncer *DBSyncer) (*MsgExecutor, error) {
+	var err error
+	m := &MsgExecutor{
+		id:          id,
+		colExecutor: colExecutor,
+		syncer:      syncer,
+	}
+
+	//m.asyncer, err = kafka.NewSyncWriter(conf.Options.TunnelMongoSslRootCaFile, kafkaUrl, 1)
+	m.asyncer, err = kafka.NewAsyncWriterWithFull(conf.Options.TunnelMongoSslRootCaFile, kafkaUrl)
+	//m.asyncer, err = ka.NewAsyncWriter(conf.Options.TunnelMongoSslRootCaFile, kafkaUrl)
+	if err != nil {
+		return nil, err
+	}
+	//_ = m.asyncer.Start()
+
+	return m, nil
+}
+
+func (exec *MsgExecutor) String() string {
+	return fmt.Sprintf("MsgExecutor[%v] collectionExecutor[%v]", exec.id, exec.colExecutor.ns.Str())
+}
+
+func (exec *MsgExecutor) start() {
+	for {
+		docs, ok := <-exec.colExecutor.docBatch
+		if !ok {
+			break
+		}
+
+		if exec.error == nil {
+			if err := exec.doSync(docs); err != nil {
+				exec.error = err
+				// panic directly if meets error
+				LOG.Crashf("%s sync failed: %v", exec, err)
+			}
+		}
+
+		exec.colExecutor.wg.Done()
+	}
+}
+
+func (exec *MsgExecutor) doSync(docs []*bson.Raw) error {
+	if len(docs) == 0 || conf.Options.FullSyncExecutorDebug {
+		return nil
+	}
+
+	var (
+		ns  = exec.colExecutor.ns.Str()
+		pid = int32(int(crc32.ChecksumIEEE([]byte(ns))) % conf.Options.TunnelKafkaPartitionNumber)
+		//pid = rand.Int32N(9)
+		//total = conf.Options.TunnelKafkaPartitionNumber
+	)
+
+	for _, doc := range docs {
+		if conf.Options.FullSyncExecutorFilterOrphanDocument && exec.syncer.orphanFilter != nil {
+			var docData bson.D
+			if err := bson.Unmarshal(*doc, &docData); err != nil {
+				LOG.Error("doSync do bson unmarshal %v failed. %v", doc, err)
+				continue
+			}
+			// judge whether is orphan document, pass if so
+			if exec.syncer.orphanFilter.Filter(docData, ns) {
+				LOG.Info("orphan document [%v] filter", doc)
+				continue
+			}
+		}
+
+		var (
+			err     error
+			encode  []byte
+			docData bson.M
+			ev      = oplog.CanalEvent{
+				Timestamp: time.Now().UnixMilli(),
+				Namespace: ns,
+				EventType: "INSERT",
+				RAG:       conf.Options.RAG,
+			}
+		)
+
+		if err = bson.Unmarshal(*doc, &docData); err != nil {
+			LOG.Error("doSync do bson unmarshal %v failed. %v", doc, err)
+			continue
+		}
+		ev.RowAfter = docData
+
+		// -------- calculate partition id --------
+		//if id, ok := docData["_id"]; ok {
+		//	pid = int32(int(crc32.ChecksumIEEE([]byte(id.(primitive.ObjectID).Hex()))) % total)
+		//}
+
+		if encode, err = json.Marshal(ev); err != nil {
+			LOG.Error("ev do json unmarshal %v failed. %v", ev, err)
+			continue
+		}
+
+		err = exec.asyncer.Send(encode, pid)
+		if err != nil {
+			LOG.Error("doSync async send %s failed. %v", string(encode), err)
+			return err
+		}
+	}
+
+	// qps limit if enable
+	if exec.syncer.qos != nil && exec.syncer.qos.Limit > 0 {
+		exec.syncer.qos.FetchBucket()
+	}
+
+	if conf.Options.LogLevel == utils.VarLogLevelDebug {
+		var docBeg, docEnd bson.M
+		bson.Unmarshal(*docs[0], &docBeg)
+		bson.Unmarshal(*docs[len(docs)-1], &docEnd)
+		LOG.Debug("DBSyncer id[%v] doSync BulkWrite with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
+			docBeg, docEnd)
+	}
+
+	return nil
+}
+
+func (exec *MsgExecutor) Error() error {
+	return exec.error
 }

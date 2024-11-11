@@ -8,7 +8,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"reflect"
-
 	"strings"
 )
 
@@ -19,6 +18,16 @@ const (
 type GenericOplog struct {
 	Raw    []byte
 	Parsed *PartialLog
+}
+
+type CanalEvent struct {
+	Timestamp int64          `json:"timestamp"`
+	Namespace string         `json:"ns"`
+	EventType string         `json:"eventType"`
+	RAG       string         `json:"rag,omitempty"`
+	PK        map[string]any `json:"pk,omitempty"`
+	RowBefore map[string]any `json:"rowBefore,omitempty"`
+	RowAfter  map[string]any `json:"rowAfter,omitempty"`
 }
 
 type ParsedLog struct {
@@ -58,11 +67,12 @@ func LogEntryEncode(logs []*GenericOplog) [][]byte {
 	// log entry encode
 	for _, log := range logs {
 		if log.Raw == nil {
-			if out, err := bson.Marshal(log.Parsed); err != nil {
+			out, err := bson.Marshal(log.Parsed)
+			if err != nil {
 				LOG.Crashf("LogEntryEncode marshal Oplog[%v] failed[%v]", log.Parsed, err)
-			} else {
-				encodedLogs = append(encodedLogs, out)
 			}
+
+			encodedLogs = append(encodedLogs, out)
 		} else {
 			encodedLogs = append(encodedLogs, log.Raw)
 		}
@@ -101,7 +111,7 @@ func (partialLog *PartialLog) String() string {
 	}
 }
 
-// dump according to the given keys, "all" == true means ignore keys
+// Dump according to the given keys, "all" == true means ignore keys
 func (partialLog *PartialLog) Dump(keys map[string]struct{}, all bool) bson.D {
 	var out bson.D
 	logType := reflect.TypeOf(partialLog.ParsedLog)
@@ -164,7 +174,7 @@ func ConvertBsonD2MExcept(input bson.D, except map[string]struct{}) (bson.M, map
 	return m, keys
 }
 
-// convert bson.D to bson.M
+// ConvertBsonD2M convert bson.D to bson.M
 func ConvertBsonD2M(input bson.D) (bson.M, map[string]struct{}) {
 	m := bson.M{}
 	keys := make(map[string]struct{}, len(input))
@@ -194,7 +204,7 @@ func ConvertBsonM2D(input bson.M) bson.D {
 	return output
 }
 
-// pay attention: the input bson.D will be modified.
+// RemoveFiled pay attention: the input bson.D will be modified.
 func RemoveFiled(input bson.D, key string) bson.D {
 	flag := -1
 	for id := range input {
@@ -271,12 +281,14 @@ func GatherApplyOps(input []*PartialLog) (*GenericOplog, error) {
 	}
 }
 
+// DiffUpdateOplogToNormal
 // Oplog from mongod(5.0) in sharding&replica
 // {"ts":{"T":1653449035,"I":3},"v":2,"op":"u","ns":"test.bar",
-//  "o":[{"Key":"diff","Value":[{"Key":"d","Value":[{"Key":"ok","Value":false}]},
-//                              {"Key":"i","Value":[{"Key":"plus_field","Value":2}]}]}],
-//  "o2":[{"Key":"_id","Value":"628da11482387c117d4e9e45"}]}
-
+//
+//	"o":[{"Key":"diff","Value":[{"Key":"d","Value":[{"Key":"ok","Value":false}]},
+//	                            {"Key":"i","Value":[{"Key":"plus_field","Value":2}]}]}],
+//	"o2":[{"Key":"_id","Value":"628da11482387c117d4e9e45"}]}
+//
 // "o" : { "$v" : 2, "diff" : { "d" : { "count" : false }, "u" : { "name" : "orange" }, "i" : { "c" : 11 } } }
 func DiffUpdateOplogToNormal(updateObj bson.D) (interface{}, error) {
 
@@ -290,7 +302,7 @@ func DiffUpdateOplogToNormal(updateObj bson.D) (interface{}, error) {
 		return updateObj, fmt.Errorf("diff field is not bson.D updateObj:[%v]", updateObj)
 	}
 
-	result, err := BuildUpdateDelteOplog("", bsonDiffObj)
+	result, err := BuildUpdateDeleteOplog("", bsonDiffObj)
 	if err != nil {
 		return updateObj, fmt.Errorf("parse diffOplog failed updateObj:[%v] err[%v]", updateObj, err)
 	}
@@ -299,7 +311,7 @@ func DiffUpdateOplogToNormal(updateObj bson.D) (interface{}, error) {
 
 }
 
-func BuildUpdateDelteOplog(prefixField string, obj bson.D) (interface{}, error) {
+func BuildUpdateDeleteOplog(prefixField string, obj bson.D) (interface{}, error) {
 	var result bson.D
 
 	for _, ele := range obj {
@@ -322,7 +334,7 @@ func BuildUpdateDelteOplog(prefixField string, obj bson.D) (interface{}, error) 
 				tmpPrefixField = prefixField + "." + ele.Key[1:]
 			}
 
-			nestObj, err := BuildUpdateDelteOplog(tmpPrefixField, ele.Value.(bson.D))
+			nestObj, err := BuildUpdateDeleteOplog(tmpPrefixField, ele.Value.(bson.D))
 			if err != nil {
 				return obj, fmt.Errorf("parse ele[%v] failed, updateObj:[%v]", ele, obj)
 			}

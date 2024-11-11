@@ -20,11 +20,11 @@ configure = {}
 
 
 def log_info(message):
-    print "INFO  [%s] %s " % (time.strftime('%Y-%m-%d %H:%M:%S'), message)
+    print("INFO  [%s] %s " % (time.strftime('%Y-%m-%d %H:%M:%S'), message))
 
 
 def log_error(message):
-    print "ERROR [%s] %s " % (time.strftime('%Y-%m-%d %H:%M:%S'), message)
+    print("ERROR [%s] %s " % (time.strftime('%Y-%m-%d %H:%M:%S'), message))
 
 
 class MongoCluster:
@@ -130,9 +130,9 @@ def check(src, dst):
 
 
 def usage():
-    print "Usage: %s --src=mongodb://localhost:8001/? --dest=mongodb://localhost:8001/? " \
-          "--excludeDbs=admin,local --excludeCollections=system.profile" % \
-          sys.argv[0]
+    print("Usage: %s --src=mongodb://localhost:8001/? --dest=mongodb://localhost:8001/? "
+          "--excludeDbs=admin,local --excludeCollections=system.profile" %
+          sys.argv[0])
     exit(0)
 
 
@@ -171,8 +171,8 @@ if __name__ == "__main__":
         src, dst = MongoCluster(srcUrl), MongoCluster(dstUrl)
         src.connect()
         dst.connect()
-    except Exception, e:
-        print e
+    except Exception as e:
+        print(e)
         log_error("create mongo connection failed src[%s], dest[%s]" % (srcUrl, dstUrl))
         exit()
 

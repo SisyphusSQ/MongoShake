@@ -13,9 +13,12 @@ type Configuration struct {
 	// 1. global
 	Id                                     string   `config:"id"`
 	MasterQuorum                           bool     `config:"master_quorum"`
+	MasterQuorumObjectId                   string   `config:"master_quorum.objectId"`
+	PromHTTPListenPort                     int      `config:"prom.http_port"`
 	FullSyncHTTPListenPort                 int      `config:"full_sync.http_port"`
 	IncrSyncHTTPListenPort                 int      `config:"incr_sync.http_port"`
 	SystemProfilePort                      int      `config:"system_profile_port"`
+	RAG                                    string   `config:"rag"`
 	LogLevel                               string   `config:"log.level"`
 	LogDirectory                           string   `config:"log.dir"`
 	LogFileName                            string   `config:"log.file"`
@@ -61,6 +64,7 @@ type Configuration struct {
 	FullSyncExecutorInsertOnDupUpdate    bool   `config:"full_sync.executor.insert_on_dup_update"`
 	FullSyncExecutorFilterOrphanDocument bool   `config:"full_sync.executor.filter.orphan_document"`
 	FullSyncExecutorMajorityEnable       bool   `config:"full_sync.executor.majority_enable"`
+	FullSyncKafkaSend                    bool
 
 	// 3. incr sync
 	IncrSyncMongoFetchMethod              string   `config:"incr_sync.mongo_fetch_method"`
@@ -123,7 +127,7 @@ func GetSafeOptions() Configuration {
 	polish := new(Configuration)
 	deepcopy.Copy(polish, &Options)
 
-	// modify mongo_ulrs
+	// modify mongo_urls
 	for i := range Options.MongoUrls {
 		polish.MongoUrls[i] = utils.BlockMongoUrlPassword(Options.MongoUrls[i], "***")
 	}

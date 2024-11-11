@@ -14,7 +14,7 @@ const (
 	TypeIncr = "incr"
 )
 
-// IncrSentinelOptions. option's value type should be
+// IncrSentinelOptions . option's value type should be
 // String or Bool or Int64
 // only used in incremental sync.
 var IncrSentinelOptions struct {
@@ -27,7 +27,7 @@ var IncrSentinelOptions struct {
 	Shutdown       bool  // close shake
 }
 
-// only used in full sync.
+// FullSentinelOptions only used in full sync.
 var FullSentinelOptions struct {
 	TPS int64
 }

@@ -49,9 +49,10 @@ const (
 	VarTunnelMock   = "mock"
 
 	// incr_sync.tunnel.message
-	VarTunnelMessageRaw  = "raw"
-	VarTunnelMessageJson = "json"
-	VarTunnelMessageBson = "bson"
+	VarTunnelMessageRaw       = "raw"
+	VarTunnelMessageJson      = "json"
+	VarTunnelMessageCanalJson = "canal_json"
+	VarTunnelMessageBson      = "bson"
 
 	// incr_sync.conflict_write_to
 	VarIncrSyncConflictWriteToNone = "none"

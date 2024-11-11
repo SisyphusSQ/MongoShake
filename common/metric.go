@@ -22,7 +22,7 @@ const (
 	PB = 1024 * TB
 )
 
-// struct used to mark the metric delta.
+// MetricDelta struct used to mark the metric delta.
 // Value: current value
 // Delta: the difference between current value and previous value
 // previous: store the previous value
@@ -128,6 +128,9 @@ func (metric *ReplicationMetric) startup() {
 				continue
 			}
 
+			status := metric.ReplStatus.GetStatusString()
+			ReplStatusProm.WithLabelValues(metric.NAME, metric.STAGE, status).Set(float64(time.Now().UnixMilli()))
+
 			ckpt := atomic.LoadUint64(&metric.CheckpointTimes)
 			lsnCkpt := atomic.LoadInt64(&metric.LSNCheckpoint)
 			restrans := atomic.LoadUint64(&metric.Retransmission)
@@ -203,64 +206,79 @@ func (metric *ReplicationMetric) Tps() uint64 {
 
 func (metric *ReplicationMetric) AddSuccess(incr uint64) {
 	atomic.AddUint64(&metric.OplogSuccess.Value, incr)
+	OplogSuccessProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(incr))
 }
 
 func (metric *ReplicationMetric) AddGet(incr uint64) {
 	atomic.AddUint64(&metric.OplogGet.Value, incr)
+	OplogGetProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(incr))
 }
 
 func (metric *ReplicationMetric) AddCheckpoint(number uint64) {
 	atomic.AddUint64(&metric.CheckpointTimes, number)
+	CheckpointTimesProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(number))
 }
 
 func (metric *ReplicationMetric) AddRetransmission(number uint64) {
 	atomic.AddUint64(&metric.Retransmission, number)
+	RetransmissionProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(number))
 }
 
 func (metric *ReplicationMetric) AddTunnelTraffic(number uint64) {
 	atomic.AddUint64(&metric.TunnelTraffic, number)
+	TunnelTrafficProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(number))
 }
 
 func (metric *ReplicationMetric) AddFilter(incr uint64) {
 	atomic.AddUint64(&metric.OplogFilter.Value, incr)
+	OplogFilterProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(incr))
 }
 
 func (metric *ReplicationMetric) AddApply(incr uint64) {
 	atomic.AddUint64(&metric.OplogApply.Value, incr)
+	OplogApplyProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(incr))
 }
 
 func (metric *ReplicationMetric) AddFailed(incr uint64) {
 	atomic.AddUint64(&metric.OplogFail.Value, incr)
+	OplogFailProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(incr))
 }
 
 func (metric *ReplicationMetric) AddConsume(incr uint64) {
 	atomic.AddUint64(&metric.OplogConsume.Value, incr)
+	OplogConsumeProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(incr))
 }
 
 func (metric *ReplicationMetric) SetOplogMax(max int64) {
 	forwardCas(&metric.OplogMaxSize, max)
+	OplogMaxSizeProm.WithLabelValues(metric.NAME, metric.STAGE).Set(float64(max))
 }
 
 func (metric *ReplicationMetric) SetOplogAvg(size int64) {
 	// not atomic update ! acceptable
 	avg := (atomic.LoadInt64(&metric.OplogAvgSize) + size) / 2
 	atomic.StoreInt64(&metric.OplogAvgSize, avg)
+	OplogAvgSizeProm.WithLabelValues(metric.NAME, metric.STAGE).Set(float64(size))
 }
 
 func (metric *ReplicationMetric) SetLSNCheckpoint(ckpt int64) {
 	forwardCas(&metric.LSNCheckpoint, ckpt)
+	LSNCheckpointProm.WithLabelValues(metric.NAME, metric.STAGE).Set(float64(ckpt))
 }
 
 func (metric *ReplicationMetric) SetLSN(lsn int64) {
 	forwardCas(&metric.LSN, lsn)
+	LSNProm.WithLabelValues(metric.NAME, metric.STAGE).Set(float64(lsn))
 }
 
 func (metric *ReplicationMetric) SetLSNACK(ack int64) {
 	forwardCas(&metric.LSNAck, ack)
+	LSNAckProm.WithLabelValues(metric.NAME, metric.STAGE).Set(float64(ack))
 }
 
 func (metric *ReplicationMetric) AddTableOps(table string, n uint64) {
 	metric.TableOperations.Incr(table, n)
+	TableOperationsProm.WithLabelValues(metric.NAME, metric.STAGE, table).Add(float64(n))
 }
 
 func (metric *ReplicationMetric) TableOps() map[string]uint64 {
@@ -269,6 +287,7 @@ func (metric *ReplicationMetric) TableOps() map[string]uint64 {
 
 func (metric *ReplicationMetric) AddWriteFailed(incr uint64) {
 	atomic.AddUint64(&metric.OplogWriteFail.Value, incr)
+	OplogWriteFailProm.WithLabelValues(metric.NAME, metric.STAGE).Add(float64(incr))
 }
 
 /************************************************************/
@@ -299,7 +318,7 @@ func (status *ReplicationStatus) IsGood() bool {
 	return uint64(*status) == WorkGood || uint64(*status) == GetReady
 }
 
-// TableOps, count collection operations
+// TableOps , count collection operations
 type TableOps struct {
 	sync.Mutex
 	ops map[string]uint64

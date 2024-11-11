@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Copy From bson.go(gopkg.in/mgo.v2 v2.0.0-20190816093944-a6b53ec6cb22)
+// ObjectId Copy From bson.go(gopkg.in/mgo.v2 v2.0.0-20190816093944-a6b53ec6cb22)
 type ObjectId string
 
 func ObjectIdHex(s string) ObjectId {

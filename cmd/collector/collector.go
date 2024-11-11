@@ -1,3 +1,4 @@
+//go:build darwin || linux || windows
 // +build darwin linux windows
 
 package main
@@ -5,7 +6,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"net/http"
 	"os"
 	"strconv"
 	"syscall"
@@ -16,7 +17,9 @@ import (
 	"github.com/alibaba/MongoShake/v2/quorum"
 
 	nimo "github.com/gugemichael/nimo4go"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	LOG "github.com/vinllen/log4go"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Exit struct{ Code int }
@@ -71,8 +74,10 @@ func main() {
 	LOG.Info("MongoDB Version Source[%v] Target[%v]", conf.Options.SourceDBVersion, conf.Options.TargetDBVersion)
 
 	conf.Options.Version = utils.BRANCH
+	if conf.Options.SystemProfilePort > 0 {
+		nimo.Profiling(conf.Options.SystemProfilePort)
+	}
 
-	nimo.Profiling(int(conf.Options.SystemProfilePort))
 	signalProfile, _ := strconv.Atoi(utils.SIGNALPROFILE)
 	signalStack, _ := strconv.Atoi(utils.SIGNALSTACK)
 	if signalProfile > 0 {
@@ -83,8 +88,7 @@ func main() {
 	}
 
 	utils.Welcome()
-
-	utils.Mkdirs(conf.Options.LogDirectory)
+	_ = utils.Mkdirs(conf.Options.LogDirectory)
 	// get exclusive process lock and write pid
 	if utils.WritePidById(conf.Options.LogDirectory, conf.Options.Id) {
 		startup()
@@ -139,6 +143,18 @@ func startup() {
 		}
 	}
 
+	// init prometheus
+	utils.InitProm()
+
+	if conf.Options.PromHTTPListenPort > 0 {
+		go func() {
+			http.Handle("/metrics", promhttp.Handler())
+			_ = http.ListenAndServe(fmt.Sprintf(":%d", conf.Options.PromHTTPListenPort), nil)
+		}()
+	} else {
+		LOG.Warn("PromHTTPListenPort is undefined, will not listen on any port")
+	}
+
 	// start mongodb replication
 	if err := coordinator.Run(); err != nil {
 		// initial or connection established failed
@@ -158,8 +174,9 @@ func startup() {
 func selectLeader() {
 	// first of all. ensure we are the Master
 	if conf.Options.MasterQuorum && conf.Options.CheckpointStorage == utils.VarCheckpointStorageDatabase {
-		// election become to Master. keep waiting if we are the candidate. election id is must fixed
-		objectId, _ := primitive.ObjectIDFromHex("5204af979955496907000001")
+		// election become to Master. keep waiting if we are the candidate.
+		// election id must be fixed, so we build _id from CheckpointStorageCollection in config file
+		objectId, _ := primitive.ObjectIDFromHex(conf.Options.MasterQuorumObjectId)
 		quorum.UseElectionObjectId(objectId)
 		go quorum.BecomeMaster(conf.Options.CheckpointStorageUrl, utils.VarCheckpointStorageDbReplicaDefault)
 

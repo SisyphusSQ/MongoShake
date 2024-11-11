@@ -8,8 +8,8 @@ import (
 
 	"github.com/alibaba/MongoShake/v2/oplog"
 
-	utils "github.com/alibaba/MongoShake/v2/common"
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
+	utils "github.com/alibaba/MongoShake/v2/common"
 	"github.com/gugemichael/nimo4go"
 	LOG "github.com/vinllen/log4go"
 )
@@ -113,6 +113,7 @@ func (msg *TMessage) ApproximateSize() uint64 {
 }
 
 type Writer interface {
+	// AckRequired
 	/**
 	 * Indicate weather this tunnel cares about ACK feedback value.
 	 * Like RPC_TUNNEL (ack required is true), it's asynchronous and
@@ -122,6 +123,7 @@ type Writer interface {
 	 */
 	AckRequired() bool
 
+	// Prepare
 	/**
 	 * prepare stage of the tunnel such as create the network connection or initialize
 	 * something etc before the Send() invocation.
@@ -129,6 +131,7 @@ type Writer interface {
 	 */
 	Prepare() bool
 
+	// Send
 	/**
 	 * write the real tunnel message to tunnel.
 	 *
@@ -139,11 +142,13 @@ type Writer interface {
 	 */
 	Send(message *WMessage) int64
 
+	// ParsedLogsRequired
 	/**
 	 * whether need parsed log or raw log
 	 */
 	ParsedLogsRequired() bool
 
+	// Name
 	/*
 	 * tunnel name
 	 */
@@ -154,14 +159,15 @@ type WriterFactory struct {
 	Name string
 }
 
-// create specific Tunnel with tunnel name and pass connection
+// Create specific Tunnel with tunnel name and pass connection
 // or usefully meta
 func (factory *WriterFactory) Create(address []string, workerId uint32) Writer {
 	switch factory.Name {
 	case utils.VarTunnelKafka:
 		return &KafkaWriter{
-			RemoteAddr:  address[0],
-			PartitionId: int(workerId) % conf.Options.TunnelKafkaPartitionNumber,
+			RemoteAddr:   address[0],
+			PartitionId:  int(workerId) % conf.Options.TunnelKafkaPartitionNumber,
+			MaxPartition: conf.Options.TunnelKafkaPartitionNumber,
 		}
 	case utils.VarTunnelTcp:
 		return &TCPWriter{RemoteAddr: address[0]}
@@ -179,7 +185,7 @@ func (factory *WriterFactory) Create(address []string, workerId uint32) Writer {
 	}
 }
 
-// create specific Tunnel with tunnel name and pass connection
+// Create specific Tunnel with tunnel name and pass connection
 // or usefully meta
 func (factory *ReaderFactory) Create(address string) Reader {
 	switch factory.Name {
@@ -203,20 +209,23 @@ func (factory *ReaderFactory) Create(address string) Reader {
 }
 
 type Reader interface {
+	// Link
 	/**
-	 * Bridge of tunnel reader and aggregater(replayer)
+	 * Bridge of tunnel reader and aggregator(replayer)
 	 *
 	 */
 	Link(aggregate []Replayer) error
 }
 
 type Replayer interface {
+	// Sync
 	/**
-	 * Replay oplog entry with batched Oplog
+	 *  Replay oplog entry with batched Oplog
 	 *
 	 */
 	Sync(message *TMessage, completion func()) int64
 
+	// GetAcked
 	/**
 	 * Ack offset value
 	 *

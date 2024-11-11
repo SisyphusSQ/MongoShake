@@ -10,7 +10,7 @@ import (
 	LOG "github.com/vinllen/log4go"
 )
 
-// OplogFilter: AutologousFilter, NamespaceFilter, GidFilter, NoopFilter, DDLFilter
+// OplogFilter : AutologousFilter, NamespaceFilter, GidFilter, NoopFilter, DDLFilter
 type OplogFilter interface {
 	Filter(log *oplog.PartialLog) bool
 }
@@ -93,7 +93,7 @@ func (filter *MigrateFilter) Filter(log *oplog.PartialLog) bool {
 	return log.FromMigrate
 }
 
-// because regexp use the default perl engine which is not support inverse match, so
+// NamespaceFilter because regexp use the default perl engine which is not support inverse match, so
 // use two rules to match
 type NamespaceFilter struct {
 	whiteRule      string
