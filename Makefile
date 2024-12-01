@@ -15,7 +15,7 @@ clean:
 	rm -rf cmd/collector/diagnostic
 	rm -rf cmd/receiver/diagnostic
 
-darwin:
+darwin: clean
 	bash build.sh darwin
 
 darwin_test:
