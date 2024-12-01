@@ -3,6 +3,7 @@ package ckpt
 import (
 	"errors"
 	"fmt"
+
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
 

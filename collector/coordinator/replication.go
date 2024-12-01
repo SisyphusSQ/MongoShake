@@ -52,7 +52,7 @@ func (coordinator *ReplicationCoordinator) Run() error {
 		return err
 	}
 
-	// all configurations has changed to immutable
+	// all configurations have changed to immutable
 	// opts, _ := json.Marshal(conf.Options)
 	opts, _ := json.Marshal(conf.GetSafeOptions())
 	LOG.Info("Collector configuration %s", string(opts))
@@ -109,10 +109,12 @@ func (coordinator *ReplicationCoordinator) Run() error {
 }
 
 func (coordinator *ReplicationCoordinator) sanitizeMongoDB() error {
-	var conn *utils.MongoCommunityConn
-	var err error
-	var hasUniqIndex = false
-	rs := map[string]int{}
+	var (
+		err          error
+		conn         *utils.MongoCommunityConn
+		hasUniqIndex = false
+		rs           = make(map[string]int)
+	)
 
 	// try to connect CheckpointStorage
 	checkpointStorageUrl := conf.Options.CheckpointStorageUrl

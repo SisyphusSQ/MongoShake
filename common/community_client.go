@@ -145,7 +145,7 @@ func NewMongoCommunityConn(url string, connectMode string, timeout bool, readCon
 	if err != nil {
 		return nil, fmt.Errorf("new client failed: %v", err)
 	}
-	if err := client.Connect(ctx); err != nil {
+	if err = client.Connect(ctx); err != nil {
 		return nil, fmt.Errorf("connect to %s failed: %v", BlockMongoUrlPassword(url, "***"), err)
 	}
 
@@ -191,7 +191,6 @@ func (conn *MongoCommunityConn) HasOplogNs(queryConditon bson.M) bool {
 }
 
 func (conn *MongoCommunityConn) AcquireReplicaSetName() string {
-
 	res, err := conn.Client.Database("admin").
 		RunCommand(conn.ctx, bson.D{{"replSetGetStatus", 1}}).DecodeBytes()
 	if err != nil {

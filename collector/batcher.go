@@ -198,7 +198,7 @@ func (batcher *Batcher) getBatch() []*oplog.GenericOplog {
 
 /*
  * if delay > 0, this function wait till delay timeout.
- * However, if the mergeBatch contain may oplogs, the delay time will depends on the first
+ * However, if the mergeBatch contain may oplogs, the delay time will depend on the first
  * oplog timestamp. So, if the time span of the included batched oplog is too large, the
  * delay time is inaccurate.
  * the second return value marks whether should exit.
@@ -335,9 +335,9 @@ func (batcher *Batcher) BatchMore() (genericOplogs [][]*oplog.GenericOplog, barr
 
 				batcher.remainLogs = mergeBatch[i+1:]
 
-				allEmpty := batcher.setLastOplog()
-				nimo.AssertTrue(allEmpty == true, "batcher.batchGroup don't be empty")
-				return batcher.batchGroup, true, allEmpty, false
+				allEmpty2 := batcher.setLastOplog()
+				nimo.AssertTrue(allEmpty2 == true, "batcher.batchGroup don't be empty")
+				return batcher.batchGroup, true, allEmpty2, false
 			} else {
 
 				// TODO need do filter
@@ -459,7 +459,7 @@ func (batcher *Batcher) handleTransaction(txnMeta oplog.TxnMeta,
 
 	// distributed transaction is abort, ignore these Oplogs and clear buffer
 	if txnMeta.IsAbort() {
-		err := batcher.txnBuffer.PurgeTxn(txnMeta)
+		err = batcher.txnBuffer.PurgeTxn(txnMeta)
 		if err != nil {
 			LOG.Crashf("%s cleaning up txnBuffer failed, err[%v] oplog[%v]",
 				batcher.syncer, err, genericLog.Parsed.ParsedLog)
@@ -480,6 +480,7 @@ func (batcher *Batcher) handleTransaction(txnMeta oplog.TxnMeta,
 	mustSerial = false
 	// transaction can be commit now
 	ops, errs := batcher.txnBuffer.GetTxnStream(txnMeta)
+
 Loop:
 	for {
 		select {
@@ -501,20 +502,20 @@ Loop:
 					Raw:    nil,
 					Parsed: newOplog,
 				})
-		case err := <-errs:
-			if err != nil {
+		case err2 := <-errs:
+			if err2 != nil {
 				LOG.Crashf("error replaying transaction, err[%v]", err)
 			}
 			break Loop
 		}
 	}
 
-	// Individual transaction that do not have commamnd can run run with other curd oplog
+	// Individual transaction that do not have command can run with other curd oplog
 	if !txnMeta.IsCommitOp() && !haveCommandInTransaction &&
 		genericLog.Parsed.PrevOpTime.String() == emptyPrevRaw.String() {
 		mustIndividual = false
 	}
-	// transaction applyOps that do not have command can run parallelly
+	// transaction applyOps that do not have command can run parallel
 	if haveCommandInTransaction {
 		mustSerial = true
 	}

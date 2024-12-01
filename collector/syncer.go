@@ -3,7 +3,7 @@ package collector
 import (
 	"errors"
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"strings"
 	"time"
 
 	"github.com/alibaba/MongoShake/v2/collector/ckpt"
@@ -14,18 +14,17 @@ import (
 	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/alibaba/MongoShake/v2/quorum"
 
-	"strings"
-
 	nimo "github.com/gugemichael/nimo4go"
 	LOG "github.com/vinllen/log4go"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 const (
 	// FetcherBufferCapacity   = 256
 	// AdaptiveBatchingMaxSize = 16384 // 16k
 
-	// bson deserialize workload is CPU-intensive task
+	// PipelineQueueMaxNr bson deserialize workload is CPU-intensive task
 	PipelineQueueMaxNr    = 8
 	PipelineQueueMiddleNr = 4
 	PipelineQueueMinNr    = 1

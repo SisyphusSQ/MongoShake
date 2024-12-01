@@ -94,11 +94,10 @@ func (cui *CheckUniqueIndexExistsJob) innerRun() error {
 		LOG.Debug("extra job[%s] check", cui.Name())
 		for i, source := range cui.urls {
 			for _, ns := range nsList {
-
 				LOG.Debug("extra job[%s] check[%v]", cui.Name(), ns)
 				cursor, _ := conns[i].Client.Database(ns.Database).Collection(ns.Collection).Indexes().List(nil)
-				for cursor.Next(context.Background()) {
 
+				for cursor.Next(context.Background()) {
 					name, nErr := cursor.Current.LookupErr("name")
 					unique, uErr := cursor.Current.LookupErr("unique")
 					if uErr == nil && nErr == nil &&
