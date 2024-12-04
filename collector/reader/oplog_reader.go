@@ -6,10 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"sync"
 	"time"
 
@@ -18,6 +14,10 @@ import (
 	"github.com/alibaba/MongoShake/v2/oplog"
 
 	LOG "github.com/vinllen/log4go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 	localDB = "local"
 )
 
-// TimeoutError. mongodb query executed timeout
+// TimeoutError mongodb query executed timeout
 var TimeoutError = errors.New("read next log timeout, It shouldn't be happen")
 var CollectionCappedError = errors.New("collection capped error")
 
@@ -263,7 +263,7 @@ func (or *OplogReader) FetchNewestTimestamp() (interface{}, error) {
 	return nil, fmt.Errorf("interface not implement")
 }
 
-// GidOplogReader. query along with gid
+// GidOplogReader query along with gid
 type GidOplogReader struct {
 	OplogReader
 }

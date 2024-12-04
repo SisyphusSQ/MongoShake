@@ -237,13 +237,15 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 		exec.syncer.qos.FetchBucket()
 	}
 
-	if conf.Options.LogLevel == utils.VarLogLevelDebug {
-		var docBeg, docEnd bson.M
-		bson.Unmarshal(*docs[0], &docBeg)
-		bson.Unmarshal(*docs[len(docs)-1], &docEnd)
-		LOG.Debug("DBSyncer id[%v] doSync BulkWrite with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
-			docBeg, docEnd)
-	}
+	/*
+		if conf.Options.LogLevel == utils.VarLogLevelDebug {
+			var docBeg, docEnd bson.M
+			bson.Unmarshal(*docs[0], &docBeg)
+			bson.Unmarshal(*docs[len(docs)-1], &docEnd)
+			LOG.Debug("DBSyncer id[%v] doSync BulkWrite with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
+				docBeg, docEnd)
+		}
+	*/
 
 	opts := options.BulkWrite().SetOrdered(false)
 	res, err := exec.conn.Client.Database(ns.Database).Collection(ns.Collection).BulkWrite(nil, models, opts)
@@ -426,13 +428,15 @@ func (exec *MsgExecutor) doSync(docs []*bson.Raw) error {
 		exec.syncer.qos.FetchBucket()
 	}
 
-	if conf.Options.LogLevel == utils.VarLogLevelDebug {
-		var docBeg, docEnd bson.M
-		bson.Unmarshal(*docs[0], &docBeg)
-		bson.Unmarshal(*docs[len(docs)-1], &docEnd)
-		LOG.Debug("DBSyncer id[%v] doSync BulkWrite with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
-			docBeg, docEnd)
-	}
+	/*
+		if conf.Options.LogLevel == utils.VarLogLevelDebug {
+			var docBeg, docEnd bson.M
+			bson.Unmarshal(*docs[0], &docBeg)
+			bson.Unmarshal(*docs[len(docs)-1], &docEnd)
+			LOG.Debug("DBSyncer id[%v] doSync BulkWrite with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
+				docBeg, docEnd)
+		}
+	*/
 
 	return nil
 }

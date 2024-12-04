@@ -62,7 +62,7 @@ func GetDBVersion(conn *MongoCommunityConn) (string, error) {
 	return ver, nil
 }
 
-// get current db version and compare to threshold. Return whether the result
+// GetAndCompareVersion get current db version and compare to threshold. Return whether the result
 // is bigger or equal to the input threshold.
 func GetAndCompareVersion(conn *MongoCommunityConn, threshold string, compare string) (bool, error) {
 	var err error
@@ -293,13 +293,13 @@ func FindFirstErrorIndexAndMessageN(err error) (int, string, bool) {
 func GetListCollectionQueryCondition(conn *MongoCommunityConn) bson.M {
 	// "collection", "timeseries", 3.4 start to support views
 	versionOk, _ := GetAndCompareVersion(conn, "3.4.0", "")
-	queryConditon := bson.M{}
+	queryCondition := bson.M{}
 	if versionOk {
 		// 改成 not
-		queryConditon = bson.M{"type": bson.M{"$in": bson.A{"collection", "timeseries"}}}
+		queryCondition = bson.M{"type": bson.M{"$in": bson.A{"collection", "timeseries"}}}
 	}
 
-	return queryConditon
+	return queryCondition
 }
 
 /**

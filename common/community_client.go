@@ -178,8 +178,8 @@ func (conn *MongoCommunityConn) IsGood() bool {
 	return true
 }
 
-func (conn *MongoCommunityConn) HasOplogNs(queryConditon bson.M) bool {
-	if ns, err := conn.Client.Database("local").ListCollectionNames(nil, queryConditon); err == nil {
+func (conn *MongoCommunityConn) HasOplogNs(queryCondition bson.M) bool {
+	if ns, err := conn.Client.Database("local").ListCollectionNames(nil, queryCondition); err == nil {
 		for _, table := range ns {
 			if table == OplogNS {
 				return true

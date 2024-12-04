@@ -3,17 +3,16 @@ package sharding
 import (
 	"context"
 	"fmt"
-	conf "github.com/alibaba/MongoShake/v2/collector/configure"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"reflect"
 	"strings"
 
+	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
 	"github.com/alibaba/MongoShake/v2/oplog"
 
-	"reflect"
-
 	LOG "github.com/vinllen/log4go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 const (
@@ -184,7 +183,8 @@ func GetColShardType(conn *utils.MongoCommunityConn, namespace string) ([]string
 	}
 
 	for _, item := range colDoc {
-		fmt.Println(item)
+		LOG.Debug("item: %v", item)
+
 		// either be a single hashed field, or a list of ascending fields
 		switch v := item.Value.(type) {
 		case string:

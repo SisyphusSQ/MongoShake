@@ -133,7 +133,10 @@ func NewOplogSyncer(
 		syncer.hasher = oplog.NewWhiteListObjectIdHasher(conf.Options.IncrSyncShardByObjectIdWhiteList)
 	}
 
-	filterList := filter.OplogFilterChain{new(filter.AutologousFilter), new(filter.NoopFilter), filter.NewGidFilter(gids)}
+	filterList := filter.OplogFilterChain{
+		new(filter.AutologousFilter), new(filter.NoopFilter),
+		filter.NewGidFilter(gids), filter.NewCmdFilter(conf.Options.FilterCmd),
+	}
 
 	// namespace filter, heavy operation
 	if len(conf.Options.FilterNamespaceWhite) != 0 || len(conf.Options.FilterNamespaceBlack) != 0 {

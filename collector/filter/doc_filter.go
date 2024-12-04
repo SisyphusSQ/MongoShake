@@ -9,7 +9,7 @@ import (
 	utils "github.com/alibaba/MongoShake/v2/common"
 )
 
-// namespace should be filtered.
+// NsShouldBeIgnore namespace should be filtered.
 // key: ns, value: true means prefix, false means contain
 var NsShouldBeIgnore = map[string]bool{
 	"admin.":                        true,
@@ -20,7 +20,6 @@ var NsShouldBeIgnore = map[string]bool{
 	"system.views":                  false,
 }
 
-// namespace should not be filtered.
 // NsShouldNotBeIgnore has a higher priority than NsShouldBeIgnore
 // key: ns, value: true means prefix, false means contain
 var NsShouldNotBeIgnore = map[string]bool{
@@ -39,7 +38,7 @@ func InitNs(specialNsList []string) {
 	}
 }
 
-// DocFilter: AutologousFilter, NamespaceFilter
+// DocFilter : AutologousFilter, NamespaceFilter
 type DocFilter interface {
 	FilterNs(namespace string) bool
 }

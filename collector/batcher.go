@@ -54,6 +54,7 @@ func getExitPoint() primitive.Timestamp {
 	return utils.Int64ToTimestamp(utils.IncrSentinelOptions.ExitPoint)
 }
 
+// Batcher
 /*
  * as we mentioned in syncer.go, Batcher is used to batch oplog before sending in order to
  * improve performance.
@@ -64,6 +65,7 @@ type Batcher struct {
 
 	// filter functionality by gid
 	filterList filter.OplogFilterChain
+
 	// oplog handler
 	handler OplogHandler
 
@@ -330,6 +332,7 @@ func (batcher *Batcher) BatchMore() (genericOplogs [][]*oplog.GenericOplog, barr
 			if !isRet {
 				continue
 			}
+
 			if mustIndividual {
 				batcher.barrierOplogs = deliveredOps
 
@@ -373,12 +376,9 @@ func (batcher *Batcher) BatchMore() (genericOplogs [][]*oplog.GenericOplog, barr
 
 		// current is ddl
 		if ddlFilter.Filter(genericLog.Parsed) {
-
 			if conf.Options.FilterDDLEnable {
 				batcher.barrierOplogs = append(batcher.barrierOplogs, genericLog)
-
 				batcher.remainLogs = mergeBatch[i+1:]
-
 				return batcher.batchGroup, true, batcher.setLastOplog(), false
 			} else {
 				// filter
@@ -471,7 +471,7 @@ func (batcher *Batcher) handleTransaction(txnMeta oplog.TxnMeta,
 	}
 
 	if !txnMeta.IsCommit() {
-		// transaction can not be commit
+		// transaction can not be commited
 		return false, false, false, nil
 	}
 

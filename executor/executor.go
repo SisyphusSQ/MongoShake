@@ -251,8 +251,7 @@ func (exec *Executor) doSync(logs []*OplogRecord) error {
 	// split batched oplogRecords into (ns, op) groups. individual group
 	// can be accomplished in single MongoDB request. groups
 	// in this executor will be sequential
-	oplogGroups := LogsGroupCombiner{maxGroupNr: OplogsMaxGroupNum,
-		maxGroupSize: OplogsMaxGroupSize}.mergeToGroups(transLogs)
+	oplogGroups := LogsGroupCombiner{maxGroupNr: OplogsMaxGroupNum, maxGroupSize: OplogsMaxGroupSize}.mergeToGroups(transLogs)
 	for _, group := range oplogGroups {
 		if err := exec.execute(group); err != nil {
 			return err

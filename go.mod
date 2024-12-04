@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.9.0
 	github.com/vinllen/go-diskqueue v1.0.2-0.20210318091137-9e570abf8db4
 	github.com/vinllen/log4go v0.0.0-20180514124125-3848a366df9d
-	go.mongodb.org/mongo-driver v1.17.1
+	go.mongodb.org/mongo-driver v1.10.6
 )
 
 require github.com/deathowl/go-metrics-prometheus v0.0.0-20221009205350-f2a1482ba35b
@@ -38,6 +38,7 @@ require (
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect

@@ -21,7 +21,8 @@ type Hasher interface {
 }
 
 /*********************************************/
-// PrimaryKeyHasher
+
+// TableHasher
 type TableHasher struct {
 	Hasher
 }
@@ -43,11 +44,13 @@ func (collectionHasher *TableHasher) DistributeOplogByMod(log *PartialLog, mod i
 }
 
 /*********************************************/
+
 // PrimaryKeyHasher
 type PrimaryKeyHasher struct {
 	Hasher
 }
 
+// DistributeOplogByMod
 // we need to ensure that oplog entry will be sent to the same job[$hash]
 // if they have the same ObjectID. thus we can consume the oplog entry
 // sequentially

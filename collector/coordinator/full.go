@@ -66,22 +66,24 @@ func (coordinator *ReplicationCoordinator) startDocumentReplication() error {
 		fromIsSharding   = coordinator.SourceIsSharding()
 	)
 
-	LOG.Info("before do full sync, first check whether persist stage is...")
-	for range time.NewTicker(1 * time.Second).C {
-		var stage int32
-		for _, syncer := range coordinator.syncerGroup {
-			stage = syncer.PersistStage()
-			switch stage {
-			case utils.FetchStageStoreUnknown:
-				LOG.Info("in stage FetchStageStoreUnknown, waiting for flush...")
-				time.Sleep(500 * time.Millisecond)
-			case utils.FetchStageStoreDiskNoApply:
-				goto start
-			case utils.FetchStageStoreMemoryApply:
-				LOG.Info("in this stage[%v], skip full sync", utils.LogFetchStage(stage))
-				return nil
-			default:
-				LOG.Crashf("startDocumentReplication invalid fetch stage[%v]", utils.LogFetchStage(stage))
+	if conf.Options.SyncMode == utils.VarSyncModeAll {
+		LOG.Info("before do full sync, first check whether persist stage is...")
+		for range time.NewTicker(1 * time.Second).C {
+			var stage int32
+			for _, syncer := range coordinator.syncerGroup {
+				stage = syncer.PersistStage()
+				switch stage {
+				case utils.FetchStageStoreUnknown:
+					LOG.Info("in stage FetchStageStoreUnknown, waiting for flush...")
+					time.Sleep(500 * time.Millisecond)
+				case utils.FetchStageStoreDiskNoApply:
+					goto start
+				case utils.FetchStageStoreMemoryApply:
+					LOG.Info("in this stage[%v], skip full sync", utils.LogFetchStage(stage))
+					return nil
+				default:
+					LOG.Crashf("startDocumentReplication invalid fetch stage[%v]", utils.LogFetchStage(stage))
+				}
 			}
 		}
 	}

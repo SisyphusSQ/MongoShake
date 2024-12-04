@@ -41,6 +41,7 @@ type Configuration struct {
 	FilterPassSpecialDb                    []string `config:"filter.pass.special.db"`
 	FilterDDLEnable                        bool     `config:"filter.ddl_enable"`
 	FilterOplogGids                        bool     `config:"filter.oplog.gids"` // add v2.4.17
+	FilterCmd                              string   `config:"filter.cmds"`
 	CheckpointStorageUrl                   string   `config:"checkpoint.storage.url"`
 	CheckpointStorageDb                    string   `config:"checkpoint.storage.db"`
 	CheckpointStorageCollection            string   `config:"checkpoint.storage.collection"`
