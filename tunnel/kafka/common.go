@@ -4,17 +4,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	LOG "github.com/vinllen/log4go"
 	"os"
 	"strings"
 	"time"
-
-	utils "github.com/alibaba/MongoShake/v2/common"
 
 	"github.com/IBM/sarama"
 	prometheusmetrics "github.com/deathowl/go-metrics-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rcrowley/go-metrics"
+
+	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 var (
@@ -61,7 +61,7 @@ func NewConfig(rootCaFile string) (*Config, error) {
 		}
 		caCert, err := os.ReadFile(rootCaFile)
 		if err != nil {
-			LOG.Critical("failed to load the ca cert file[%s]: %s failed: %s", rootCaFile, err.Error())
+			l.Logger.Errorf("failed to load the ca cert file: %s failed: %s", rootCaFile, err.Error())
 			return nil, err
 		}
 		caCertPool := x509.NewCertPool()
@@ -82,16 +82,16 @@ func NewConfig(rootCaFile string) (*Config, error) {
 // parse the address (topic@broker1,broker2,...)
 func parse(address string) (string, []string, error) {
 	arr := strings.Split(address, topicSplitter)
-	l := len(arr)
-	if l == 0 || l > 2 {
+	le := len(arr)
+	if le == 0 || le > 2 {
 		return "", nil, fmt.Errorf("address format error")
 	}
 
 	topic := topicDefault
-	if l == 2 {
+	if le == 2 {
 		topic = arr[0]
 	}
 
-	brokers := strings.Split(arr[l-1], brokersSplitter)
+	brokers := strings.Split(arr[le-1], brokersSplitter)
 	return topic, brokers, nil
 }

@@ -2,18 +2,18 @@ package utils
 
 import (
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"math/rand"
 	_ "net/http/pprof" // for profiling
 	"os"
+	"path"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"time"
 
-	"path"
-	"reflect"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 func YieldInMs(n int64) {
@@ -221,7 +221,7 @@ func WritePidById(dir, id string) bool {
 
 	pidfile := filepath.Join(dir, id) + ".pid"
 	if err := WritePid(pidfile); err != nil {
-		LOG.Critical("Process write pid and lock file failed : %v", err)
+		l.Logger.Errorf("Process write pid and lock file failed : %v", err)
 		return false
 	}
 	return true
@@ -239,7 +239,7 @@ func Welcome() {
 ------------------------------
 `
 	startMsg := "if you have any problem, please visit https://github.com/alibaba/MongoShake/wiki/FAQ"
-	LOG.Warn(fmt.Sprintf("\n%s\n%s\n", welcome, startMsg))
+	l.Logger.Warnf(fmt.Sprintf("\n%s\n%s\n", welcome, startMsg))
 }
 
 func Goodbye() {
@@ -264,5 +264,5 @@ Oh we finish ? # _ _ #|# _ _ #
                     #####
 `
 
-	LOG.Warn(goodbye)
+	l.Logger.Warn(goodbye)
 }

@@ -1,16 +1,15 @@
 package tunnel
 
 import (
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"math/rand"
-
-	"github.com/alibaba/MongoShake/v2/oplog"
-
 	"fmt"
+	"math/rand"
 	"time"
 
-	LOG "github.com/vinllen/log4go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	l "github.com/alibaba/MongoShake/v2/lib/log"
+	"github.com/alibaba/MongoShake/v2/oplog"
 )
 
 const (
@@ -33,7 +32,7 @@ type FakeGenerator struct {
 func (tunnel *MockReader) Link(replayer []Replayer) error {
 	tunnel.generator = make([]*FakeGenerator, len(replayer))
 	for i := 0; i != len(replayer); i++ {
-		LOG.Info("mock receiver generator-%d start", i)
+		l.Logger.Infof("mock receiver generator-%d start", i)
 		tunnel.generator[i] = &FakeGenerator{replayer: replayer}
 		tunnel.generator[i].index = uint32(i)
 		go tunnel.generator[i].start()
@@ -60,13 +59,13 @@ func (generator *FakeGenerator) start() {
 				// noop 0.1%
 				partialLog.Operation = "n"
 				partialLog.Gid = "mock-noop"
-				partialLog.Object = bson.D{bson.E{"mongoshake-mock", "ApsaraDB"}}
+				partialLog.Object = bson.D{bson.E{Key: "mongoshake-mock", Value: "ApsaraDB"}}
 			case nr%100 == 0:
 				// delete 1%
 				for k, oid := range existIds {
 					partialLog.Operation = "d"
 					partialLog.Gid = "mock-delete"
-					partialLog.Object = bson.D{bson.E{"_id", oid}}
+					partialLog.Object = bson.D{bson.E{Key: "_id", Value: oid}}
 					delete(existIds, k)
 					break
 				}
@@ -110,6 +109,6 @@ func (generator *FakeGenerator) start() {
 			RawLogs:  oplog.LogEntryEncode(batch),
 		}, nil)
 
-		LOG.Info("mock generator-index-%d generate and apply logs %d", generator.index, len(batch))
+		l.Logger.Infof("mock generator-index-%d generate and apply logs %d", generator.index, len(batch))
 	}
 }

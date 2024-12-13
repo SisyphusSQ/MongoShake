@@ -3,19 +3,19 @@ package collector
 // persist oplog on disk
 
 import (
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	diskQueue "github.com/SisyphusSQ/go-diskqueue"
+	nimo "github.com/gugemichael/nimo4go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	"github.com/alibaba/MongoShake/v2/oplog"
-
-	nimo "github.com/gugemichael/nimo4go"
-	diskQueue "github.com/vinllen/go-diskqueue"
-	LOG "github.com/vinllen/log4go"
 )
 
 const (
@@ -67,7 +67,7 @@ func (p *Persister) Start() {
 }
 
 func (p *Persister) SetFetchStage(fetchStage int32) {
-	LOG.Info("persister replset[%v] update fetch status to: %v", p.replset, utils.LogFetchStage(fetchStage))
+	l.Logger.Infof("persister replset[%v] update fetch status to: %v", p.replset, utils.LogFetchStage(fetchStage))
 	atomic.StoreInt32(&p.fetchStage, fetchStage)
 }
 
@@ -79,22 +79,29 @@ func (p *Persister) InitDiskQueue(dqName string) {
 	fetchStage := p.GetFetchStage()
 	// fetchStage shouldn't change between here
 	if fetchStage != utils.FetchStageStoreDiskNoApply && fetchStage != utils.FetchStageStoreDiskApply {
-		LOG.Crashf("persister replset[%v] init disk queue in illegal fetchStage %v",
+		l.Logger.Panicf("persister replset[%v] init disk queue in illegal fetchStage %v",
 			p.replset, utils.LogFetchStage(fetchStage))
 	}
 	if p.DiskQueue != nil {
-		LOG.Crashf("init disk queue failed: already exist")
+		l.Logger.Panicf("init disk queue failed: already exist")
 	}
 
-	p.DiskQueue = diskQueue.NewDiskQueue(dqName, conf.Options.LogDirectory,
+	/*
+		p.DiskQueue = diskQueue.NewDiskQueue(dqName, conf.Options.LogDirectory,
+			conf.Options.FullSyncReaderOplogStoreDiskMaxSize, FullSyncReaderOplogStoreDiskReadBatch,
+			1<<30, 0, 1<<26,
+			1000, 2*time.Second)
+	*/
+	p.DiskQueue = diskQueue.NewDiskQueueWithLogger(dqName, conf.Options.LogDirectory,
 		conf.Options.FullSyncReaderOplogStoreDiskMaxSize, FullSyncReaderOplogStoreDiskReadBatch,
 		1<<30, 0, 1<<26,
-		1000, 2*time.Second)
+		1000, 2*time.Second,
+		diskQueue.VerbosePrintfLogger(l.Logger))
 }
 
 func (p *Persister) GetQueryTsFromDiskQueue() primitive.Timestamp {
 	if p.DiskQueue == nil {
-		LOG.Crashf("persister replset[%v] get query timestamp from nil disk queue", p.replset)
+		l.Logger.Panicf("persister replset[%v] get query timestamp from nil disk queue", p.replset)
 	}
 
 	logData := p.DiskQueue.GetLastWriteData()
@@ -105,24 +112,24 @@ func (p *Persister) GetQueryTsFromDiskQueue() primitive.Timestamp {
 	if conf.Options.IncrSyncMongoFetchMethod == utils.VarIncrSyncMongoFetchMethodOplog {
 		log := new(oplog.ParsedLog)
 		if err := bson.Unmarshal(logData, log); err != nil {
-			LOG.Crashf("unmarshal oplog[%v] failed[%v]", logData, err)
+			l.Logger.Panicf("unmarshal oplog[%v] failed[%v]", logData, err)
 		}
 
 		// assert
 		if log.Namespace == "" && log.Operation != "n" {
-			LOG.Crashf("unmarshal data to oplog failed: %v", log)
+			l.Logger.Panicf("unmarshal data to oplog failed: %v", log)
 		}
 		return log.Timestamp
 	} else {
 		// change_stream
 		log := new(oplog.Event)
 		if err := bson.Unmarshal(logData, log); err != nil {
-			LOG.Crashf("unmarshal oplog[%v] failed[%v]", logData, err)
+			l.Logger.Panicf("unmarshal oplog[%v] failed[%v]", logData, err)
 		}
 
 		// assert
 		if log.OperationType == "" {
-			LOG.Crashf("unmarshal data to change stream event failed: %v", log)
+			l.Logger.Panicf("unmarshal data to change stream event failed: %v", log)
 		}
 		return log.ClusterTime
 	}
@@ -139,7 +146,7 @@ func (p *Persister) Inject(input []byte) {
 	case utils.VarIncrSyncReaderDebugPrint:
 		var test interface{}
 		bson.Unmarshal(input, &test)
-		LOG.Info("print debug: %v", test)
+		l.Logger.Info("print debug: %v", test)
 	default:
 		// do nothing
 	}
@@ -162,7 +169,7 @@ func (p *Persister) Inject(input []byte) {
 				// double check, if full and disk apply is finish, dishQueue should be nil
 				atomic.AddUint64(&p.diskWriteCount, 1)
 				if err := p.DiskQueue.Put(input); err != nil {
-					LOG.Crashf("persister inject replset[%v] put oplog to disk queue failed[%v]",
+					l.Logger.Panicf("persister inject replset[%v] put oplog to disk queue failed[%v]",
 						p.replset, err)
 				}
 			} else {
@@ -170,7 +177,7 @@ func (p *Persister) Inject(input []byte) {
 				p.PushToPendingQueue(input)
 			}
 		} else {
-			LOG.Crashf("persister inject replset[%v] has no diskQueue with fetch stage[%v]",
+			l.Logger.Panicf("persister inject replset[%v] has no diskQueue with fetch stage[%v]",
 				p.replset, utils.LogFetchStage(fetchStage))
 		}
 	} else {
@@ -213,15 +220,15 @@ func (p *Persister) retrieve() {
 		case utils.FetchStageStoreUnknown, utils.FetchStageStoreDiskNoApply:
 			// do nothing
 		case utils.FetchStageStoreMemoryApply:
-			LOG.Info("stage[%v] no need to apply data", utils.LogFetchStage(stage))
+			l.Logger.Info("stage[%v] no need to apply data", utils.LogFetchStage(stage))
 			return
 		default:
-			LOG.Crashf("invalid fetch stage[%v]", utils.LogFetchStage(stage))
+			l.Logger.Panicf("invalid fetch stage[%v]", utils.LogFetchStage(stage))
 		}
 	}
 
 apply:
-	LOG.Info("persister retrieve for replset[%v] begin to read from disk queue with depth[%v]",
+	l.Logger.Info("persister retrieve for replset[%v] begin to read from disk queue with depth[%v]",
 		p.replset, p.DiskQueue.Depth())
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -240,7 +247,7 @@ apply:
 
 			// move to next read
 			if err := p.DiskQueue.Next(); err != nil {
-				LOG.Crashf("persister replset[%v] retrieve get next failed[%v]", p.replset, err)
+				l.Logger.Panicf("persister replset[%v] retrieve get next failed[%v]", p.replset, err)
 			}
 		case <-ticker.C:
 			// check no more data batching?
@@ -251,7 +258,7 @@ apply:
 	}
 
 finish:
-	LOG.Info("persister retrieve for replset[%v] block fetch with disk queue depth[%v]",
+	l.Logger.Info("persister retrieve for replset[%v] block fetch with disk queue depth[%v]",
 		p.replset, p.DiskQueue.Depth())
 
 	// wait to finish retrieve and continue fetch to store to memory
@@ -269,23 +276,23 @@ finish:
 		p.diskQueueLastTs = utils.TimeStampToInt64(p.GetQueryTsFromDiskQueue())
 
 		if err := p.DiskQueue.Next(); err != nil {
-			LOG.Crash(err)
+			l.Logger.Panic(err)
 		}
 	}
 
 	if p.DiskQueue.Depth() != 0 {
-		LOG.Crashf("persister retrieve for replset[%v] finish, but disk queue depth[%v] is not empty",
+		l.Logger.Panicf("persister retrieve for replset[%v] finish, but disk queue depth[%v] is not empty",
 			p.replset, p.DiskQueue.Depth())
 	}
 
 	p.SetFetchStage(utils.FetchStageStoreMemoryApply)
 	if err := p.DiskQueue.Delete(); err != nil {
-		LOG.Critical("persister retrieve for replset[%v] close disk queue error. %v", p.replset, err)
+		l.Logger.Errorf("persister retrieve for replset[%v] close disk queue error. %v", p.replset, err)
 	}
 	// clean p.DiskQueue
 	p.DiskQueue = nil
 
-	LOG.Info("persister retriever for replset[%v] exits", p.replset)
+	l.Logger.Info("persister retriever for replset[%v] exits", p.replset)
 }
 
 const opOnDisk = "oplog_on_disk"

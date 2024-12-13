@@ -7,7 +7,7 @@ import (
 
 	"github.com/alibaba/MongoShake/v2/oplog"
 
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 // OplogFilter : AutologousFilter, NamespaceFilter, GidFilter, NoopFilter, DDLFilter
@@ -20,7 +20,7 @@ type OplogFilterChain []OplogFilter
 func (chain OplogFilterChain) IterateFilter(log *oplog.PartialLog) bool {
 	for _, filter := range chain {
 		if filter.Filter(log) {
-			LOG.Debug("%v filter oplog[%v]", reflect.TypeOf(filter), log)
+			l.Logger.Debugf("%v filter oplog[%v]", reflect.TypeOf(filter), log)
 			return true
 		}
 	}
@@ -177,7 +177,7 @@ func NewNamespaceFilter(white, black []string) *NamespaceFilter {
 func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 	var result bool
 
-	LOG.Debug("NamespaceFilter check oplog:%v", log.Object)
+	l.Logger.Debug("NamespaceFilter check oplog:%v", log.Object)
 
 	db := strings.SplitN(log.Namespace, ".", 2)[0]
 	if log.Operation != "c" {
@@ -197,7 +197,7 @@ func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 		// DDL
 		operation, found := oplog.ExtraCommandName(log.Object)
 		if !found {
-			LOG.Warn("extraCommandName meets type[%s] which is not implemented, ignore!", operation)
+			l.Logger.Warnf("extraCommandName meets type[%s] which is not implemented, ignore!", operation)
 			return false
 		}
 
@@ -231,7 +231,7 @@ func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 		case "emptycapped":
 			col, ok := oplog.GetKey(log.Object, operation).(string)
 			if !ok {
-				LOG.Warn("extraCommandName meets illegal %v oplog %v, ignore!", operation, log.Object)
+				l.Logger.Warnf("extraCommandName meets illegal %v oplog %v, ignore!", operation, log.Object)
 				return false
 			}
 			log.Namespace = fmt.Sprintf("%s.%s", db, col)
@@ -240,7 +240,7 @@ func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 			// { "renameCollection" : "my.tbl", "to" : "my.my", "stayTemp" : false, "dropTarget" : false }
 			ns, ok := oplog.GetKey(log.Object, operation).(string)
 			if !ok {
-				LOG.Warn("extraCommandName meets illegal %v oplog %v, ignore!", operation, log.Object)
+				l.Logger.Warnf("extraCommandName meets illegal %v oplog %v, ignore!", operation, log.Object)
 				return false
 			}
 			log.Namespace = ns
@@ -252,26 +252,26 @@ func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 			//var ops []bson.D
 			//var remainOps []interface{} // return []interface{}
 			//
-			//LOG.Info("log.Object:%v , type:%v", log.Object, reflect.TypeOf(oplog.GetKey(log.Object, "applyOps")))
+			//l.Logger.Info("log.Object:%v , type:%v", log.Object, reflect.TypeOf(oplog.GetKey(log.Object, "applyOps")))
 			//// it's very strange, some documents are []interface, some are []bson.D
 			//switch v := oplog.GetKey(log.Object, "applyOps").(type) {
 			//case []interface{}:
-			//	LOG.Info("Fiter interface %v\n", v)
+			//	l.Logger.Info("Fiter interface %v\n", v)
 			//	for _, ele := range v {
 			//		ops = append(ops, ele.(bson.D))
 			//	}
 			//case []bson.D:
-			//	LOG.Info("Fiter bson.D %v\n", v)
+			//	l.Logger.Info("Fiter bson.D %v\n", v)
 			//	ops = v
 			//case primitive.A:
 			//	for i, ele := range v {
 			//		ops = append(ops, ele.(bson.D))
 			//
-			//		LOG.Info("Fiter primitive.A type %v, ele:%v", reflect.TypeOf(ele), ele)
+			//		l.Logger.Info("Fiter primitive.A type %v, ele:%v", reflect.TypeOf(ele), ele)
 			//		is_filter := false
 			//		for _, ele1 := range ele.(bson.D) {
 			//			if ele1.Key == "ns" && filter.FilterNs(ele1.Value.(string)) {
-			//				LOG.Info("Fiter primitive.A  fitler:%v", ele1.Value)
+			//				l.Logger.Info("Fiter primitive.A  fitler:%v", ele1.Value)
 			//				is_filter = true
 			//				break
 			//			}
@@ -284,14 +284,14 @@ func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 			//				}
 			//			}
 			//
-			//			LOG.Info("Fiter zhangst  result:%v", ele)
+			//			l.Logger.Info("Fiter zhangst  result:%v", ele)
 			//		}
 			//	}
 			//default:
-			//	LOG.Error("unknow applyOps type, log:%v", log.Object)
+			//	l.Logger.Error("unknow applyOps type, log:%v", log.Object)
 			//}
 			//
-			//LOG.Info("Fiter primitive.A ops:%v", ops)
+			//l.Logger.Info("Fiter primitive.A ops:%v", ops)
 			//// except field 'o'
 			//except := map[string]struct{}{
 			//	"o": {},
@@ -306,7 +306,7 @@ func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 			//}
 			//oplog.SetFiled(log.Object, "applyOps", remainOps)
 			//
-			//LOG.Info("NamespaceFilter applyOps filter?[%v], remainOps: %v", len(remainOps) == 0, remainOps)
+			//l.Logger.Info("NamespaceFilter applyOps filter?[%v], remainOps: %v", len(remainOps) == 0, remainOps)
 			//return len(remainOps) == 0
 		default:
 			// such as: dropDatabase

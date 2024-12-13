@@ -6,6 +6,9 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"os"
+	"time"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -13,10 +16,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
-	"os"
-	"time"
 
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 type MongoCommunityConn struct {
@@ -157,7 +158,7 @@ func NewMongoCommunityConn(url string, connectMode string, timeout bool, readCon
 			BlockMongoUrlPassword(url, "***"), err)
 	}
 
-	LOG.Info("New session to %s successfully", BlockMongoUrlPassword(url, "***"))
+	l.Logger.Infof("New session to %s successfully", BlockMongoUrlPassword(url, "***"))
 	return &MongoCommunityConn{
 		Client: client,
 		URL:    url,
@@ -166,7 +167,7 @@ func NewMongoCommunityConn(url string, connectMode string, timeout bool, readCon
 }
 
 func (conn *MongoCommunityConn) Close() {
-	LOG.Info("Close client with %s", BlockMongoUrlPassword(conn.URL, "***"))
+	l.Logger.Infof("Close client with %s", BlockMongoUrlPassword(conn.URL, "***"))
 	conn.Client.Disconnect(conn.ctx)
 }
 
@@ -194,13 +195,13 @@ func (conn *MongoCommunityConn) AcquireReplicaSetName() string {
 	res, err := conn.Client.Database("admin").
 		RunCommand(conn.ctx, bson.D{{"replSetGetStatus", 1}}).DecodeBytes()
 	if err != nil {
-		LOG.Warn("Replica set name not found in system.replset: %v", err)
+		l.Logger.Warnf("Replica set name not found in system.replset: %v", err)
 		return ""
 	}
 
 	id, ok := res.Lookup("set").StringValueOK()
 	if !ok {
-		LOG.Warn("Replica set name not found, is empty")
+		l.Logger.Warn("Replica set name not found, is empty")
 		return ""
 	}
 
@@ -212,7 +213,7 @@ func (conn *MongoCommunityConn) HasUniqueIndex(queryConditon bson.M) bool {
 	var databases []string
 	var err error
 	if databases, err = conn.Client.ListDatabaseNames(nil, bson.M{}); err != nil {
-		LOG.Critical("Couldn't get databases from remote server: %v", err)
+		l.Logger.Errorf("Couldn't get databases from remote server: %v", err)
 		return false
 	}
 
@@ -227,7 +228,7 @@ func (conn *MongoCommunityConn) HasUniqueIndex(queryConditon bson.M) bool {
 			}
 		}
 	}
-	LOG.Info("HasUniqueIndex checkNs:%v", checkNs)
+	l.Logger.Infof("HasUniqueIndex checkNs:%v", checkNs)
 
 	for _, ns := range checkNs {
 		cursor, _ := conn.Client.Database(ns.Database).Collection(ns.Collection).Indexes().List(nil)
@@ -235,7 +236,7 @@ func (conn *MongoCommunityConn) HasUniqueIndex(queryConditon bson.M) bool {
 
 			unique, uerr := cursor.Current.LookupErr("unique")
 			if uerr == nil && unique.Boolean() == true {
-				LOG.Info("Found unique index %s on %s.%s in auto shard mode",
+				l.Logger.Infof("Found unique index %s on %s.%s in auto shard mode",
 					cursor.Current.Lookup("name").StringValue(), ns.Database, ns.Collection)
 				return true
 			}
@@ -252,7 +253,7 @@ func (conn *MongoCommunityConn) CurrentDate() primitive.Timestamp {
 
 	t, i, ok := res.Lookup("operationTime").TimestampOK()
 	if !ok {
-		LOG.Warn("Replica set operationTime not found, res[%v]", res)
+		l.Logger.Warnf("Replica set operationTime not found, res[%v]", res)
 		return primitive.Timestamp{T: uint32(time.Now().Unix()), I: 0}
 	}
 

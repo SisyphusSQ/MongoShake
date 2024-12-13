@@ -6,7 +6,8 @@ import (
 	"reflect"
 
 	nimo "github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
+
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 const (
@@ -85,7 +86,7 @@ func (sentinel *Sentinel) Register() {
 
 		kv := make(map[string]interface{})
 		if err := json.Unmarshal(body, &kv); err != nil {
-			LOG.Info("Register set options wrong format : %v", err)
+			l.Logger.Infof("Register set options wrong format : %v", err)
 			return map[string]string{"sentinel": "request json options wrong format"}
 		}
 		for name := range kv {
@@ -121,8 +122,7 @@ func (sentinel *Sentinel) Register() {
 			return map[string]string{"sentinel": fmt.Sprintf("%s option isn't corret", name)}
 		}
 
-		LOG.Info("new sentinel options: %v", options)
-
+		l.Logger.Infof("new sentinel options: %v", options)
 		return map[string]string{"sentinel": "success"}
 	})
 }

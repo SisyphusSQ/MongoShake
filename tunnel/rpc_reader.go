@@ -4,7 +4,7 @@ import (
 	"net"
 	"net/rpc"
 
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 type RPCReader struct {
@@ -19,7 +19,7 @@ func (tunnel *RPCReader) Link(replayers []Replayer) (err error) {
 
 	var listener net.Listener
 	if listener, err = net.Listen("tcp", tunnel.address); err != nil {
-		LOG.Critical("Rpc reader listen listenAddress [%s] failed", tunnel.address)
+		l.Logger.Errorf("Rpc reader listen listenAddress [%s] failed", tunnel.address)
 		return
 	}
 

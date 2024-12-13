@@ -3,15 +3,15 @@ package executor
 import (
 	"bytes"
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"reflect"
 	"strings"
 
-	"github.com/alibaba/MongoShake/v2/oplog"
-
 	nimo "github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	l "github.com/alibaba/MongoShake/v2/lib/log"
+	"github.com/alibaba/MongoShake/v2/oplog"
 )
 
 const MultiColumnIndexSplitter = "|"
@@ -210,7 +210,7 @@ func calculateSignature(object interface{}) (sign float64) {
 	default:
 		nimo.Assert(fmt.Sprintf("bson value signature type is not recognized [%d, %s]", reflect.TypeOf(object).Kind(),
 			reflect.TypeOf(object).Name()))
-		LOG.Critical("Bson value signature type is not recognized [%d, %s]", reflect.TypeOf(object).Kind(),
+		l.Logger.Errorf("Bson value signature type is not recognized [%d, %s]", reflect.TypeOf(object).Kind(),
 			reflect.TypeOf(object).Name())
 
 		// default value represents may be conflict. the signature is unsafe. just speed up !
@@ -276,7 +276,7 @@ func ExactlyMatch(first, second interface{}) bool {
 		}
 	default:
 		nimo.Assert(fmt.Sprintf("bson value check similar. not recognized [%s]", reflect.TypeOf(first).Name()))
-		LOG.Critical("bson value check similar. not recognized [%s]", reflect.TypeOf(first).Name())
+		l.Logger.Errorf("bson value check similar. not recognized [%s]", reflect.TypeOf(first).Name())
 	}
 
 	// TODO: execute path may be walked from DEFAULT we meet something that the type
@@ -360,7 +360,7 @@ func (*BarrierMatrix) split(logs []*PartialLogWithCallbak) [][]*PartialLogWithCa
 							break
 						}
 					}
-					LOG.Warn("Logs have same identifier signature. but don't exactly match. signature : %s", current)
+					l.Logger.Warnf("Logs have same identifier signature. but don't exactly match. signature : %s", current)
 				}
 				signatureSet[current] = append(signatureSet[current], log)
 			}
@@ -373,7 +373,7 @@ func (*BarrierMatrix) split(logs []*PartialLogWithCallbak) [][]*PartialLogWithCa
 		segmentList = append(segmentList, seg)
 	}
 
-	LOG.Info("Barrier matrix split vector to length %d", len(segmentList))
+	l.Logger.Infof("Barrier matrix split vector to length %d", len(segmentList))
 	return segmentList
 }
 

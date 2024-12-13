@@ -32,9 +32,9 @@ func SanitizeOptions() error {
 	}
 
 	// default value
-	if err := checkDefaultValue(); err != nil {
-		return err
-	}
+	//if err := checkDefaultValue(); err != nil {
+	//	return err
+	//}
 
 	// check connection
 	if err := checkConnection(); err != nil {
@@ -70,7 +70,7 @@ func handleDeprecateConf() error {
 	return nil
 }
 
-func checkDefaultValue() error {
+func CheckDefaultValue() error {
 	// 1. global
 	if conf.Options.Id == "" {
 		conf.Options.Id = "mongoshake"
@@ -101,6 +101,15 @@ func checkDefaultValue() error {
 	}
 	if conf.Options.LogFileName == "" {
 		conf.Options.LogFileName = "mongoshake.log"
+	}
+	if conf.Options.LogMaxSizeMb == 0 {
+		conf.Options.LogMaxSizeMb = 20
+	}
+	if conf.Options.LogMaxBackup == 0 {
+		conf.Options.LogMaxBackup = 30
+	}
+	if conf.Options.LogMaxAge == 0 {
+		conf.Options.LogMaxAge = 7
 	}
 
 	if conf.Options.SyncMode == "" {

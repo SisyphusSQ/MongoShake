@@ -6,13 +6,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	nimo "github.com/gugemichael/nimo4go"
+
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/alibaba/MongoShake/v2/tunnel"
-
-	nimo "github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
 )
 
 const MaxUnAckListLength = 128 * 256
@@ -124,7 +124,7 @@ func (worker *Worker) findFirstAvailableBatch() []*oplog.GenericOplog {
 }
 
 func (worker *Worker) StartWorker() {
-	LOG.Info("%s start working with jobs batch queue. buffer capacity %d",
+	l.Logger.Infof("%s start working with jobs batch queue. buffer capacity %d",
 		worker, cap(worker.queue))
 
 	var batch []*oplog.GenericOplog
@@ -145,7 +145,7 @@ func (worker *Worker) StartWorker() {
 				worker.transfer(batch)
 				worker.syncer.replMetric.AddConsume(uint64(len(batch)))
 			}
-			utils.DEBUG_LOG("%s poll queued batch oplogs. total[%d]", worker, len(batch))
+			l.Logger.Debugf("%s poll queued batch oplogs. total[%d]", worker, len(batch))
 		}
 	}
 }
@@ -186,7 +186,7 @@ func (worker *Worker) transfer(batch []*oplog.GenericOplog) {
 		}
 		replyAndAcked := worker.writeController.Send(logs, tag)
 
-		LOG.Info("%s transfer retransmit: %t send [%d] logs. reply_acked [%v], list_unack [%d] ",
+		l.Logger.Infof("%s transfer retransmit: %t send [%d] logs. reply_acked [%v], list_unack [%d] ",
 			worker, worker.retransmit, len(logs), utils.ExtractTimestampForLog(replyAndAcked), len(worker.listUnACK))
 
 		switch {
@@ -208,13 +208,13 @@ func (worker *Worker) transfer(batch []*oplog.GenericOplog) {
 			worker.syncer.replMetric.ReplStatus.Clear(utils.TunnelSendBad)
 
 		case replyAndAcked == tunnel.ReplyRetransmission:
-			LOG.Info("%s received ReplyRetransmission reply, now status %t", worker, worker.retransmit)
+			l.Logger.Infof("%s received ReplyRetransmission reply, now status %t", worker, worker.retransmit)
 			// next step. keep trying with retransmission util we received
 			// a non-retransmission message
 			worker.retransmit = true
 
 		default:
-			LOG.Warn("%s transfer oplogs failed with reply value %d", worker, replyAndAcked)
+			l.Logger.Warnf("%s transfer oplogs failed with reply value %d", worker, replyAndAcked)
 			// we treat batched logs fail as just one time failed. and
 			// notify failed retry listener
 			worker.syncer.replMetric.AddFailed(1)
@@ -234,7 +234,7 @@ func (worker *Worker) probe() {
 
 func (worker *Worker) retain(batch []*oplog.GenericOplog) {
 	worker.listUnACK = append(worker.listUnACK, batch...)
-	LOG.Debug("%s copy batch oplogs [%d] to listUnACK count. UnACK remained [%d]",
+	l.Logger.Debugf("%s copy batch oplogs [%d] to listUnACK count. UnACK remained [%d]",
 		worker, len(batch), len(worker.listUnACK))
 }
 
@@ -244,7 +244,7 @@ func (worker *Worker) purgeACK() {
 	})
 
 	if bigger != 0 {
-		LOG.Debug("%s purge unacked [lsn_ack:%d]. keep slice position from %d util %d",
+		l.Logger.Debugf("%s purge unacked [lsn_ack:%d]. keep slice position from %d util %d",
 			worker, worker.ack, bigger, len(worker.listUnACK))
 		worker.listUnACK = worker.listUnACK[bigger:]
 		worker.syncer.replMetric.AddSuccess(uint64(bigger))

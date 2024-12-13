@@ -8,40 +8,39 @@ import (
 	"net"
 	"time"
 
-	utils "github.com/alibaba/MongoShake/v2/common"
-
 	nimo "github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
+
+	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 // Network packet structure
 //
-//		[ Big-edian ]
-//		Header (12 Bytes)
-// 		Body (n Bytes)
+//	[ Big-edian ]
+//	Header (12 Bytes)
+//	Body (n Bytes)
 //
-//		[ Header structure ]
-//		-----------------------------------------------------------------------------------
-//		|    magic(2B)    |  version(1B)  |  type(1B)  |  crc32(4B) |  length(4B)  |
-//		-----------------------------------------------------------------------------------
-//		|  0x00201314   |       0x01       |      0x01    |   0xFFFFF  |     4096        |
-//		-----------------------------------------------------------------------------------
+//	[ Header structure ]
+//	-----------------------------------------------------------------------------------
+//	|    magic(2B)    |  version(1B)  |  type(1B)  |  crc32(4B) |  length(4B)  |
+//	-----------------------------------------------------------------------------------
+//	|  0x00201314   |       0x01       |      0x01    |   0xFFFFF  |     4096        |
+//	-----------------------------------------------------------------------------------
 //
-//		[ PacketWrite payload ]
-//		-------------------------------------------------------------------------------------------------------------------------------------------------
-//		|    cksum(4B)    |  tag(4B)  |  shard(4B)  |  compress(4B) |  number(4B)  |  len(4B)  |  log([]byte)  |  len(4B)  |  log([]byte)  |
-//		-------------------------------------------------------------------------------------------------------------------------------------------------
+//	[ PacketWrite payload ]
+//	-------------------------------------------------------------------------------------------------------------------------------------------------
+//	|    cksum(4B)    |  tag(4B)  |  shard(4B)  |  compress(4B) |  number(4B)  |  len(4B)  |  log([]byte)  |  len(4B)  |  log([]byte)  |
+//	-------------------------------------------------------------------------------------------------------------------------------------------------
 //
-//		[ PacketGetACK payload ]
-//		--------------|
-//		|    (zero)    |
-//		--------------|
+//	[ PacketGetACK payload ]
+//	--------------|
+//	|    (zero)    |
+//	--------------|
 //
-//		[ PacketReturnACK payload ]
-//		------------------
-//		|    ack(4B)    |
-//		------------------
-//
+//	[ PacketReturnACK payload ]
+//	------------------
+//	|    ack(4B)    |
+//	------------------
 const (
 	MagicNumber    = 0xCAFE
 	CurrentVersion = 0x01
@@ -136,7 +135,7 @@ func (tcp *TcpSocket) ensureNetwork() error {
 		var err error
 		tcp.socket, err = net.DialTCP("tcp4", nil, tcp.addr)
 		if err != nil {
-			LOG.Critical("channel connect to %s error %s", tcp.addr.String(), err.Error())
+			l.Logger.Errorf("channel connect to %s error %s", tcp.addr.String(), err.Error())
 			return err
 		}
 		tcp.socket.SetNoDelay(false)
@@ -209,7 +208,7 @@ func (writer *TCPWriter) Send(message *WMessage) int64 {
 	socketTimeout(tcp.socket, 0)
 	if _, err = tcp.socket.Write(packet.encode()); err != nil {
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			LOG.Warn("Tcp writer send data packet timeout")
+			l.Logger.Warnf("Tcp writer send data packet timeout")
 			return ReplyNetworkTimeout
 		}
 		tcp.release()
@@ -224,7 +223,7 @@ func (writer *TCPWriter) Prepare() bool {
 	for i := 0; i != TotalQueueNum; i++ {
 		writer.channel[i].addr, err = net.ResolveTCPAddr("tcp4", writer.RemoteAddr)
 		if err != nil {
-			LOG.Critical("Resolve channel listenAddress error: %s", err.Error())
+			l.Logger.Errorf("Resolve channel listenAddress error: %s", err.Error())
 			return false
 		}
 	}
@@ -258,6 +257,6 @@ func socketTimeout(socket *net.TCPConn, duration time.Duration) {
 }
 
 func tcpErrorAndRelease(socket *TcpSocket, err string) {
-	LOG.Critical("tcp operation error and release, %s", err)
+	l.Logger.Errorf("tcp operation error and release, %v", err)
 	socket.release()
 }

@@ -7,18 +7,18 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
+
 	"github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/alibaba/MongoShake/v2/tunnel/kafka"
-
-	LOG "github.com/vinllen/log4go"
-	"go.mongodb.org/mongo-driver/bson"
-	"os"
-	"strings"
 )
 
 const (
@@ -63,11 +63,11 @@ func (tunnel *KafkaWriter) Prepare() bool {
 	if !unitTestWriteKafkaFlag && conf.Options.IncrSyncTunnelKafkaDebug == "" {
 		writer, err = kafka.NewAsyncWriter(conf.Options.TunnelMongoSslRootCaFile, tunnel.RemoteAddr)
 		if err != nil {
-			LOG.Critical("KafkaWriter prepare[%v] create writer error[%v]", tunnel.RemoteAddr, err)
+			l.Logger.Errorf("KafkaWriter prepare[%v] create writer error[%v]", tunnel.RemoteAddr, err)
 			return false
 		}
-		if err := writer.Start(); err != nil {
-			LOG.Critical("KafkaWriter prepare[%v] start writer error[%v]", tunnel.RemoteAddr, err)
+		if err = writer.Start(); err != nil {
+			l.Logger.Errorf("KafkaWriter prepare[%v] start writer error[%v]", tunnel.RemoteAddr, err)
 			return false
 		}
 	}
@@ -80,7 +80,7 @@ func (tunnel *KafkaWriter) Prepare() bool {
 	tunnel.pushIdx = 0
 	tunnel.popIdx = 0
 
-	LOG.Info("%s starts: writer_thread count[%v]", tunnel, tunnel.encoderNr)
+	l.Logger.Infof("%s starts: writer_thread count[%v]", tunnel, tunnel.encoderNr)
 
 	// start encoder
 	for i := 0; i < int(tunnel.encoderNr); i++ {
@@ -157,7 +157,7 @@ func (tunnel *KafkaWriter) encode(id int) {
 				case "d":
 					ev.EventType = "DELETE"
 				default:
-					LOG.Debug("this operation[%s] didn't support", log.Operation)
+					l.Logger.Debugf("this operation[%s] didn't support", log.Operation)
 					continue
 				}
 
@@ -183,12 +183,12 @@ func (tunnel *KafkaWriter) encode(id int) {
 				encode, err = json.Marshal(ev)
 				if err != nil {
 					if strings.Contains(err.Error(), "unsupported value:") {
-						LOG.Error("%s json marshal data[%v] meets unsupported value[%v], skip current oplog",
+						l.Logger.Error("%s json marshal data[%v] meets unsupported value[%v], skip current oplog",
 							tunnel, log.ParsedLog, err)
 						continue
 					} else {
 						// should panic
-						LOG.Crashf("%s json marshal data[%v] error[%v]", tunnel, log.ParsedLog, err)
+						l.Logger.Panicf("%s json marshal data[%v] error[%v]", tunnel, log.ParsedLog, err)
 						tunnel.state = ReplyServerFault
 					}
 				}
@@ -209,12 +209,12 @@ func (tunnel *KafkaWriter) encode(id int) {
 					encode, err = json.Marshal(log.ParsedLog)
 					if err != nil {
 						if strings.Contains(err.Error(), "unsupported value:") {
-							LOG.Error("%s json marshal data[%v] meets unsupported value[%v], skip current oplog",
+							l.Logger.Errorf("%s json marshal data[%v] meets unsupported value[%v], skip current oplog",
 								tunnel, log.ParsedLog, err)
 							continue
 						} else {
 							// should panic
-							LOG.Crashf("%s json marshal data[%v] error[%v]", tunnel, log.ParsedLog, err)
+							l.Logger.Panicf("%s json marshal data[%v] error[%v]", tunnel, log.ParsedLog, err)
 							tunnel.state = ReplyServerFault
 						}
 					}
@@ -222,11 +222,11 @@ func (tunnel *KafkaWriter) encode(id int) {
 					encode, err = bson.MarshalExtJSON(log.ParsedLog, true, true)
 					if err != nil {
 						// should panic
-						LOG.Crashf("%s json marshal data[%v] error[%v]", tunnel, log.ParsedLog, err)
+						l.Logger.Panicf("%s json marshal data[%v] error[%v]", tunnel, log.ParsedLog, err)
 						tunnel.state = ReplyServerFault
 					}
 				} else {
-					LOG.Crashf("unknown tunnel.json.format[%v]", conf.Options.TunnelJsonFormat)
+					l.Logger.Panicf("unknown tunnel.json.format[%v]", conf.Options.TunnelJsonFormat)
 				}
 
 				tunnel.outputChan[id] <- outputLog{
@@ -262,7 +262,7 @@ func (tunnel *KafkaWriter) encode(id int) {
 			}
 
 		default:
-			LOG.Crash("%s unknown tunnel.message type: ", tunnel, conf.Options.TunnelMessage)
+			l.Logger.Panicf("%v unknown tunnel.message type: %s", tunnel, conf.Options.TunnelMessage)
 		}
 	}
 }
@@ -276,13 +276,13 @@ func (tunnel *KafkaWriter) writeKafka() {
 
 	if conf.Options.IncrSyncTunnelKafkaDebug != "" {
 		fileName := fmt.Sprintf("%s-%d", conf.Options.IncrSyncTunnelKafkaDebug, tunnel.PartitionId)
-		if _, err := os.Stat(fileName); os.IsNotExist(err) {
+		if _, err = os.Stat(fileName); os.IsNotExist(err) {
 			if debugF, err = os.Create(fileName); err != nil {
-				LOG.Crashf("%s create kafka debug file[%v] failed: %v", tunnel, fileName, err)
+				l.Logger.Panicf("%s create kafka debug file[%v] failed: %v", tunnel, fileName, err)
 			}
 		} else {
 			if debugF, err = os.OpenFile(fileName, os.O_RDWR, 0666); err != nil {
-				LOG.Crashf("%s open kafka debug file[%v] failed: %v", tunnel, fileName, err)
+				l.Logger.Panicf("%s open kafka debug file[%v] failed: %v", tunnel, fileName, err)
 			}
 		}
 		defer debugF.Close()
@@ -298,14 +298,14 @@ func (tunnel *KafkaWriter) writeKafka() {
 				unitTestWriteKafkaChan <- data.log
 			} else if conf.Options.IncrSyncTunnelKafkaDebug != "" {
 				if _, err = debugF.Write(data.log); err != nil {
-					LOG.Crashf("%s write to kafka debug file failed: %v, input data: %s", tunnel, err, data.log)
+					l.Logger.Panicf("%s write to kafka debug file failed: %v, input data: %s", tunnel, err, data.log)
 				}
 				debugF.Write([]byte{10})
 			} else {
 				for {
 					pid := int32(int(crc32.ChecksumIEEE([]byte(data.ns))) % conf.Options.TunnelKafkaPartitionNumber)
 					if err = tunnel.writer.Send(data.log, pid); err != nil {
-						LOG.Error("%s send [%v] with type[%v] error[%v]", tunnel, tunnel.RemoteAddr,
+						l.Logger.Errorf("%s send [%v] with type[%v] error[%v]", tunnel, tunnel.RemoteAddr,
 							conf.Options.TunnelMessage, err)
 
 						tunnel.state = ReplyError

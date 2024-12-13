@@ -2,12 +2,13 @@ package transform
 
 import (
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"regexp"
 	"strings"
 
-	LOG "github.com/vinllen/log4go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 type NamespaceTransform struct {
@@ -31,7 +32,7 @@ func NewNamespaceTransform(transRule []string) *NamespaceTransform {
 		rulePair := strings.SplitN(rule, ":", 2)
 		if len(rulePair) != 2 ||
 			len(strings.SplitN(rulePair[0], ".", 2)) != len(strings.SplitN(rulePair[1], ".", 2)) {
-			LOG.Crashf("transform rule %v is illegal", rule)
+			l.Logger.Panicf("transform rule %v is illegal", rule)
 		}
 		fromRule := strings.Replace(rulePair[0], ".", "\\.", -1)
 		fromPattern := fmt.Sprintf("^%s$|^%s(\\..*)$", fromRule, fromRule)
@@ -57,7 +58,7 @@ func NewDBTransform(transRule []string) *DBTransform {
 		rulePair := strings.SplitN(rule, ":", 2)
 		if len(rulePair) != 2 ||
 			len(strings.SplitN(rulePair[0], ".", 2)) != len(strings.SplitN(rulePair[1], ".", 2)) {
-			LOG.Crashf("transform rule %v is illegal", rule)
+			l.Logger.Panicf("transform rule %v is illegal", rule)
 		}
 		fromDB := strings.SplitN(rulePair[0], ".", 2)[0]
 		toDB := strings.SplitN(rulePair[1], ".", 2)[0]
@@ -89,7 +90,7 @@ func TransformDBRef(logObject bson.D, db string, nsTrans *NamespaceTransform) bs
 		if len(logObject) > 2 {
 			logObject[2].Value = tuple[0]
 		} else {
-			logObject = append(logObject, primitive.E{"$db", tuple[0]})
+			logObject = append(logObject, primitive.E{Key: "$db", Value: tuple[0]})
 		}
 		return logObject
 	}

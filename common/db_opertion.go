@@ -2,16 +2,17 @@ package utils
 
 import (
 	"fmt"
-	LOG "github.com/vinllen/log4go"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"math"
-	"strconv"
-	"strings"
 
-	"sort"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 var (
@@ -123,13 +124,13 @@ func getOplogTimestamp(conn *MongoCommunityConn, sortType int) (int64, error) {
 	return TimeStampToInt64(result["ts"].(primitive.Timestamp)), nil
 }
 
-// get newest oplog
+// GetNewestTimestampByConn get newest oplog
 func GetNewestTimestampByConn(conn *MongoCommunityConn) (int64, error) {
 
 	return getOplogTimestamp(conn, -1)
 }
 
-// get oldest oplog
+// GetOldestTimestampByConn get oldest oplog
 func GetOldestTimestampByConn(conn *MongoCommunityConn) (int64, error) {
 
 	return getOplogTimestamp(conn, 1)
@@ -167,12 +168,13 @@ func GetOldestTimestampByUrl(url string, fromMongoS bool, sslRootFile string) (i
 	return GetOldestTimestampByConn(conn)
 }
 
-// record the oldest and newest timestamp of each mongod
+// TimestampNode record the oldest and newest timestamp of each mongod
 type TimestampNode struct {
 	Oldest int64
 	Newest int64
 }
 
+// GetAllTimestamp
 /*
  * get all newest timestamp
  * return:
@@ -220,7 +222,7 @@ func GetAllTimestamp(sources []*MongoSource, sslRootFile string) (map[string]Tim
 		}
 	}
 
-	LOG.Info("GetAllTimestamp biggestNew:%v, smallestNew:%v, biggestOld:%v, smallestOld:%v,"+
+	l.Logger.Infof("GetAllTimestamp biggestNew:%v, smallestNew:%v, biggestOld:%v, smallestOld:%v,"+
 		" MongoSource:%v, tsMap:%v",
 		Int64ToTimestamp(biggestNew), Int64ToTimestamp(smallestNew),
 		Int64ToTimestamp(biggestOld), Int64ToTimestamp(smallestOld),
@@ -228,7 +230,7 @@ func GetAllTimestamp(sources []*MongoSource, sslRootFile string) (map[string]Tim
 	return tsMap, biggestNew, smallestNew, biggestOld, smallestOld, nil
 }
 
-// only used in unit test
+// GetAllTimestampInUT only used in unit test
 func GetAllTimestampInUT() (map[string]TimestampNode, int64,
 	int64, int64, int64, error) {
 	smallestNew := int64(math.MaxInt64)
@@ -302,6 +304,7 @@ func GetListCollectionQueryCondition(conn *MongoCommunityConn) bson.M {
 	return queryCondition
 }
 
+// GetDbNamespace
 /**
  * return db namespace. return:
  *     @[]NS: namespace list, e.g., []{"a.b", "a.c"}
@@ -325,7 +328,7 @@ func GetDbNamespace(url string, filterFunc func(name string) bool, sslRootFile s
 	}
 	// sort by db names
 	sort.Strings(dbNames)
-	LOG.Debug("dbNames:%v queryConditon:%v", dbNames, queryConditon)
+	l.Logger.Debugf("dbNames:%v queryConditon:%v", dbNames, queryConditon)
 
 	nsList := make([]NS, 0, 128)
 	for _, db := range dbNames {
@@ -335,14 +338,14 @@ func GetDbNamespace(url string, filterFunc func(name string) bool, sslRootFile s
 			return nil, nil, err
 		}
 
-		LOG.Debug("db[%v] colNames: %v queryConditon:%v", db, colNames, queryConditon)
+		l.Logger.Debugf("db[%v] colNames: %v queryConditon:%v", db, colNames, queryConditon)
 		for _, col := range colNames {
 			ns := NS{Database: db, Collection: col}
 			if strings.HasPrefix(col, "system.") {
 				continue
 			}
 			if filterFunc != nil && filterFunc(ns.Str()) {
-				LOG.Debug("Namespace is filtered. %v", ns.Str())
+				l.Logger.Debugf("Namespace is filtered. %v", ns.Str())
 				continue
 			}
 			nsList = append(nsList, ns)
@@ -361,6 +364,7 @@ func GetDbNamespace(url string, filterFunc func(name string) bool, sslRootFile s
 	return nsList, nsMap, nil
 }
 
+// GetAllNamespace
 /**
  * return all namespace. return:
  *     @map[NS]struct{}: namespace set where key is the namespace while value is useless, e.g., "a.b"->nil, "a.c"->nil

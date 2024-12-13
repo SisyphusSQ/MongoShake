@@ -2,13 +2,13 @@ package filter
 
 import (
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson"
 	"testing"
-
-	"github.com/alibaba/MongoShake/v2/oplog"
 
 	"github.com/getlantern/deepcopy"
 	"github.com/stretchr/testify/assert"
+	"go.mongodb.org/mongo-driver/bson"
+
+	"github.com/alibaba/MongoShake/v2/oplog"
 )
 
 func TestNamespaceFilter(t *testing.T) {

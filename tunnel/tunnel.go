@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"hash/crc32"
 
-	"github.com/alibaba/MongoShake/v2/oplog"
-
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
+	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
 )
 
 const InitialStageChecking = false
@@ -180,7 +179,7 @@ func (factory *WriterFactory) Create(address []string, workerId uint32) Writer {
 	case utils.VarTunnelDirect:
 		return &DirectWriter{RemoteAddrs: address, ReplayerId: workerId}
 	default:
-		LOG.Critical("Specific tunnel not found [%s]", factory.Name)
+		l.Logger.Errorf("Specific tunnel not found [%s]", factory.Name)
 		return nil
 	}
 }
@@ -200,10 +199,10 @@ func (factory *ReaderFactory) Create(address string) Reader {
 	case utils.VarTunnelFile:
 		return &FileReader{File: address}
 	case utils.VarTunnelDirect:
-		LOG.Critical("direct mode not supported in reader")
+		l.Logger.Errorf("direct mode not supported in reader")
 		return nil
 	default:
-		LOG.Critical("Specific tunnel not found [%s]", factory.Name)
+		l.Logger.Errorf("Specific tunnel not found [%s]", factory.Name)
 		return nil
 	}
 }

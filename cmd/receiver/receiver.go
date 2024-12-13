@@ -10,12 +10,12 @@ import (
 	"syscall"
 
 	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	replayer "github.com/alibaba/MongoShake/v2/receiver"
 	conf "github.com/alibaba/MongoShake/v2/receiver/configure"
 	"github.com/alibaba/MongoShake/v2/tunnel"
 
 	nimo "github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
 )
 
 type Exit struct{ Code int }
@@ -23,7 +23,6 @@ type Exit struct{ Code int }
 func main() {
 	var err error
 	defer handleExit()
-	defer LOG.Close()
 
 	// argument options
 	configuration := flag.String("conf", "", "configure file absolute path")
@@ -42,7 +41,7 @@ func main() {
 
 	configure := nimo.NewConfigLoader(file)
 	configure.SetDateFormat(utils.GolangSecurityTime)
-	if err := configure.Load(&conf.Options); err != nil {
+	if err = configure.Load(&conf.Options); err != nil {
 		crash(fmt.Sprintf("Configure file %s parse failed. %v", *configuration, err), -2)
 	}
 
@@ -51,23 +50,26 @@ func main() {
 		crash(fmt.Sprintf("Conf.Options check failed: %s", err.Error()), -4)
 	}
 
-	if err := utils.InitialLogger(conf.Options.LogDirectory, conf.Options.LogFileName, conf.Options.LogLevel, conf.Options.LogFlush, *verbose); err != nil {
-		crash(fmt.Sprintf("initial log.dir[%v] log.name[%v] failed[%v].", conf.Options.LogDirectory,
+	err = l.New(conf.Options.LogLevel, conf.Options.LogDirectory, conf.Options.LogFileName,
+		conf.Options.LogMaxSizeMb, conf.Options.LogMaxBackup, conf.Options.LogMaxBackup, *verbose)
+	if err != nil {
+		crash(fmt.Sprintf("initial l.dir[%v] l.name[%v] failed[%v].", conf.Options.LogDirectory,
 			conf.Options.LogFileName, err), -2)
 	}
+	defer l.Logger.Sync()
+	defer utils.Goodbye()
 
-	nimo.Profiling(int(conf.Options.SystemProfilePort))
+	nimo.Profiling(conf.Options.SystemProfilePort)
 	signalProfile, _ := strconv.Atoi(utils.SIGNALPROFILE)
 	signalStack, _ := strconv.Atoi(utils.SIGNALSTACK)
 	if signalProfile > 0 {
 		nimo.RegisterSignalForProfiling(syscall.Signal(signalProfile))                     // syscall.SIGUSR2
 		nimo.RegisterSignalForPrintStack(syscall.Signal(signalStack), func(bytes []byte) { // syscall.SIGUSR1
-			LOG.Info(string(bytes))
+			l.Logger.Info(string(bytes))
 		})
 	}
 
 	startup()
-
 	select {}
 }
 
@@ -99,9 +101,9 @@ func startup() {
 		repList[i] = replayer.NewExampleReplayer(i)
 	}
 
-	LOG.Info("receiver is starting...")
+	l.Logger.Info("receiver is starting...")
 	if err := reader.Link(repList); err != nil {
-		LOG.Critical("Replayer link to tunnel error %v", err)
+		l.Logger.Errorf("Replayer link to tunnel error %v", err)
 		return
 	}
 }

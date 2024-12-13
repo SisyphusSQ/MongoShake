@@ -6,13 +6,13 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"errors"
+	"io"
 	"io/ioutil"
 
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
-	"github.com/alibaba/MongoShake/v2/tunnel"
-
 	utils "github.com/alibaba/MongoShake/v2/common"
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
+	"github.com/alibaba/MongoShake/v2/tunnel"
 )
 
 const (
@@ -72,10 +72,6 @@ func GetCompressorById(id uint32) (Compress, error) {
 	}
 }
 
-/*
- * ====== Compressor =======
- *
- */
 type Compressor struct {
 	// compressor nil if compress is not enable
 	zipper Compress
@@ -88,7 +84,7 @@ func (compressor *Compressor) IsRegistered() bool {
 func (compressor *Compressor) Install() bool {
 	var err error
 	if compressor.zipper, err = GetCompressorByName(conf.Options.IncrSyncWorkerOplogCompressor); err != nil {
-		LOG.Critical("Worker create compressor %s failed", conf.Options.IncrSyncWorkerOplogCompressor)
+		l.Logger.Errorf("Worker create compressor %s failed", conf.Options.IncrSyncWorkerOplogCompressor)
 		return false
 	}
 
@@ -116,12 +112,12 @@ func (compressor *Compressor) Handle(message *tunnel.WMessage) int64 {
 		}
 
 		if compressedSize == 0 || len(compressed) != len(message.RawLogs) {
-			LOG.Critical("Compressor result isn't equivalent. len(compressed) %d, len(Logs) %d", len(compressed), len(message.RawLogs))
+			l.Logger.Errorf("Compressor result isn't equivalent. len(compressed) %d, len(Logs) %d", len(compressed), len(message.RawLogs))
 			return tunnel.ReplyServerFault
 		}
 
-		LOG.Debug("Compressor-%s condense raw_size(%d), compress_size(%d), compress_ratio %d%%", compressor.zipper.Name(),
-			originSize, compressedSize, compressedSize*100/originSize)
+		l.Logger.Debugf("Compressor-%s condense raw_size(%d), compress_size(%d), compress_ratio %d%%",
+			compressor.zipper.Name(), originSize, compressedSize, compressedSize*100/originSize)
 		message.Compress = compressor.zipper.Id()
 		message.RawLogs = compressed
 	} else {
@@ -157,7 +153,7 @@ func (Gzip *GZip) Compress(chunk []byte) ([]byte, error) {
 	w, _ := gzip.NewWriterLevel(buffer, CompressLevel)
 	w.Write(chunk)
 	w.Close()
-	if compressed, err := ioutil.ReadAll(buffer); err == nil {
+	if compressed, err := io.ReadAll(buffer); err == nil {
 		return compressed, nil
 	}
 
@@ -166,7 +162,7 @@ func (Gzip *GZip) Compress(chunk []byte) ([]byte, error) {
 
 func (Gzip *GZip) Decompress(compressed []byte) ([]byte, error) {
 	r, _ := gzip.NewReader(bytes.NewBuffer(compressed))
-	if uncompress, err := ioutil.ReadAll(r); err == nil {
+	if uncompress, err := io.ReadAll(r); err == nil {
 		return uncompress, nil
 	}
 
@@ -257,7 +253,7 @@ func (deflate *Deflate) Compress(chunk []byte) ([]byte, error) {
 	w, _ := flate.NewWriter(buffer, CompressLevel)
 	w.Write(chunk)
 	w.Close()
-	if compressed, err := ioutil.ReadAll(buffer); err == nil {
+	if compressed, err := io.ReadAll(buffer); err == nil {
 		return compressed, nil
 	}
 
@@ -266,7 +262,7 @@ func (deflate *Deflate) Compress(chunk []byte) ([]byte, error) {
 
 func (deflate *Deflate) Decompress(compressed []byte) ([]byte, error) {
 	r := flate.NewReader(bytes.NewBuffer(compressed))
-	if uncompress, err := ioutil.ReadAll(r); err == nil {
+	if uncompress, err := io.ReadAll(r); err == nil {
 		return uncompress, nil
 	}
 

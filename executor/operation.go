@@ -1,19 +1,18 @@
 package executor
 
 import (
-	"go.mongodb.org/mongo-driver/mongo"
+	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	"github.com/alibaba/MongoShake/v2/oplog"
-
-	"fmt"
-	"sync/atomic"
-
-	LOG "github.com/vinllen/log4go"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 var ErrorsShouldSkip = map[int]string{
@@ -32,13 +31,13 @@ func (exec *Executor) ensureConnection() bool {
 			utils.ReadWriteConcernDefault, writeContern,
 			conf.Options.TunnelMongoSslRootCaFile); err != nil {
 
-			LOG.Critical("Connect to mongo cluster failed. %v", err)
+			l.Logger.Errorf("Connect to mongo cluster failed. %v", err)
 			return false
 		} else {
 			exec.conn = conn
 			if exec.bulkInsert, err = utils.GetAndCompareVersion(exec.conn, ThresholdVersion,
 				conf.Options.TargetDBVersion); err != nil {
-				LOG.Info("compare version with return[%v], bulkInsert disable", err)
+				l.Logger.Infof("compare version with return[%v], bulkInsert disable", err)
 			}
 		}
 	}
@@ -70,11 +69,11 @@ func (exec *Executor) execute(group *OplogsGroup) error {
 		metadata := buildMetadata(group.oplogRecords[0].original.partialLog)
 		hasIndex := strings.Contains(group.ns, "system.indexes")
 
-		// LOG.Debug("fullFinishTs: %v", utils.ExtractTimestampForLog(exec.batchExecutor.FullFinishTs))
+		// l.Logger.Debugf("fullFinishTs: %v", utils.ExtractTimestampForLog(exec.batchExecutor.FullFinishTs))
 		dbWriter := NewDbWriter(exec.conn, metadata, exec.bulkInsert && !hasIndex, exec.batchExecutor.FullFinishTs)
 		var err error
 
-		LOG.Debug("Replay-%d oplog collection ns [%s] with command [%s] batch count %d, metadata %v",
+		l.Logger.Debugf("Replay-%d oplog collection ns [%s] with command [%s] batch count %d, metadata %v",
 			exec.batchExecutor.ReplayerId, group.ns, strings.ToUpper(lookupOpName(group.op)), count, metadata)
 
 		/*
@@ -100,7 +99,7 @@ func (exec *Executor) execute(group *OplogsGroup) error {
 			atomic.AddUint64(&exec.metricDelete, uint64(len(group.oplogRecords)))
 			exec.addNsMapMetric(group.ns, "d", len(group.oplogRecords))
 		case "c":
-			LOG.Info("Replay-%d run DDL with metadata[%v] in db[%v], firstLog: %v", exec.batchExecutor.ReplayerId,
+			l.Logger.Info("Replay-%d run DDL with metadata[%v] in db[%v], firstLog: %v", exec.batchExecutor.ReplayerId,
 				dc[0], metadata, group.oplogRecords[0].original.partialLog)
 			err = dbWriter.doCommand(dc[0], metadata, group.oplogRecords)
 			atomic.AddUint64(&exec.metricDDL, uint64(len(group.oplogRecords)))
@@ -111,19 +110,19 @@ func (exec *Executor) execute(group *OplogsGroup) error {
 			exec.addNsMapMetric(group.ns, "n", len(group.oplogRecords))
 		default:
 			atomic.AddUint64(&exec.metricUnknown, uint64(len(group.oplogRecords)))
-			LOG.Warn("Replay-%d meets unknown type oplogs found. op '%s'", exec.batchExecutor.ReplayerId, group.op)
+			l.Logger.Warn("Replay-%d meets unknown type oplogs found. op '%s'", exec.batchExecutor.ReplayerId, group.op)
 			exec.addNsMapMetric(group.ns, "x", len(group.oplogRecords))
 		}
 
 		// a few known error we can skip !! such as "ShardKeyNotFound" returned
 		// if mongoshake connected to MongoS
 		if exec.errorIgnore(err) {
-			LOG.Info("Replay-%d Discard known error[%v], It's acceptable", exec.batchExecutor.ReplayerId, err)
+			l.Logger.Info("Replay-%d Discard known error[%v], It's acceptable", exec.batchExecutor.ReplayerId, err)
 			err = nil
 		}
 
 		if err != nil {
-			LOG.Critical("Replayer-%d, executor-%d, oplog for namespace[%s] op[%s] failed. error type[%v]"+
+			l.Logger.Errorf("Replayer-%d, executor-%d, oplog for namespace[%s] op[%s] failed. error type[%v]"+
 				" error[%v], logs number[%d], firstLog: %s",
 				exec.batchExecutor.ReplayerId, exec.id, group.ns, group.op, reflect.TypeOf(err), err.Error(), count,
 				group.oplogRecords[0].original.partialLog)

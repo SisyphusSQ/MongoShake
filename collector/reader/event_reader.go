@@ -3,18 +3,17 @@ package sourceReader
 // read change stream event from source mongodb
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
-	conf "github.com/alibaba/MongoShake/v2/collector/configure"
-	utils "github.com/alibaba/MongoShake/v2/common"
-
-	"fmt"
+	diskQueue "github.com/SisyphusSQ/go-diskqueue"
 
 	"github.com/alibaba/MongoShake/v2/collector/ckpt"
+	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/collector/filter"
-	diskQueue "github.com/vinllen/go-diskqueue"
-	LOG "github.com/vinllen/log4go"
+	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 const (
@@ -71,7 +70,7 @@ func (er *EventReader) Name() string {
 // not exist in this or. initial stage most of the time
 func (er *EventReader) SetQueryTimestampOnEmpty(ts interface{}) {
 	if er.startAtOperationTime == nil && ts != ckpt.InitCheckpoint {
-		LOG.Info("EventReader set query timestamp: %v", utils.ExtractTimestampForLog(ts))
+		l.Logger.Infof("EventReader set query timestamp: %v", utils.ExtractTimestampForLog(ts))
 		if val, ok := ts.(int64); ok {
 			er.startAtOperationTime = val
 		} else if val2, ok := ts.(int64); ok {
@@ -105,7 +104,7 @@ func (er *EventReader) get() ([]byte, error) {
 	}
 }
 
-// start fetcher if not exist
+// StartFetcher if not exist
 func (er *EventReader) StartFetcher() {
 	if er.fetcherExist == true {
 		return
@@ -121,7 +120,7 @@ func (er *EventReader) StartFetcher() {
 
 // fetch change stream event tp store disk queue or memory
 func (er *EventReader) fetcher() {
-	LOG.Info("start %s fetcher with src[%v] replica-name[%v] query-ts[%v]",
+	l.Logger.Infof("start %s fetcher with src[%v] replica-name[%v] query-ts[%v]",
 		er.String(), utils.BlockMongoUrlPassword(er.src, "***"), er.replset,
 		utils.ExtractTimestampForLog(er.startAtOperationTime))
 
@@ -136,7 +135,7 @@ func (er *EventReader) fetcher() {
 			err := er.client.CsHandler.Err()
 			// no data
 			er.client.Close()
-			LOG.Error("change stream reader hit the end: %v", err)
+			l.Logger.Errorf("change stream reader hit the end: %v", err)
 			time.Sleep(1 * time.Second)
 			continue
 		}
@@ -150,7 +149,7 @@ func (er *EventReader) EnsureNetwork() error {
 		return nil
 	}
 
-	LOG.Info("%s ensure network", er.String())
+	l.Logger.Infof("%s ensure network", er.String())
 
 	if er.client != nil {
 		er.client.Close() // close old client

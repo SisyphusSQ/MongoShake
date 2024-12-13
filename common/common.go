@@ -3,13 +3,13 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
 	"os"
 	"strings"
 
 	"github.com/nightlyone/lockfile"
 	LOG "github.com/vinllen/log4go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // Build info
@@ -71,6 +71,9 @@ func RunStatusMessage(status uint64) string {
 //
 // verbose: where log goes to: 0 - file，1 - file+stdout，2 - stdout
 func InitialLogger(logDir, logFile, level string, logFlush bool, verbose int) error {
+	// let verbose always be 2
+	verbose = 2
+
 	logLevel := parseLogLevel(level)
 	if verbose > 0 {
 		writer := LOG.NewConsoleLogWriter()

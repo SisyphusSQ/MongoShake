@@ -9,8 +9,7 @@ import (
 
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
-
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 const (
@@ -28,7 +27,7 @@ type extraJob interface {
 }
 
 func AddExtraJob(name string, interval int, input ...interface{}) {
-	LOG.Info("start run extra job[%v] with interval[%v]", name, interval)
+	l.Logger.Infof("start run extra job[%v] with interval[%v]", name, interval)
 
 	lock.Lock()
 	defer lock.Unlock()
@@ -79,7 +78,7 @@ func (cui *CheckUniqueIndexExistsJob) innerRun() error {
 		conns[i], err = utils.NewMongoCommunityConn(source.URL, utils.VarMongoConnectModeSecondaryPreferred, true,
 			utils.ReadWriteConcernMajority, utils.ReadWriteConcernDefault, conf.Options.MongoSslRootCaFile)
 		if err != nil {
-			LOG.Error("extra job[%s] connect source[%v] failed: %v", cui.Name(), source.URL, err)
+			l.Logger.Errorf("extra job[%s] connect source[%v] failed: %v", cui.Name(), source.URL, err)
 			return nil
 		}
 	}
@@ -91,10 +90,10 @@ func (cui *CheckUniqueIndexExistsJob) innerRun() error {
 	}
 
 	for range time.NewTicker(time.Duration(cui.interval) * time.Second).C {
-		LOG.Debug("extra job[%s] check", cui.Name())
+		l.Logger.Debugf("extra job[%s] check", cui.Name())
 		for i, source := range cui.urls {
 			for _, ns := range nsList {
-				LOG.Debug("extra job[%s] check[%v]", cui.Name(), ns)
+				l.Logger.Debugf("extra job[%s] check[%v]", cui.Name(), ns)
 				cursor, _ := conns[i].Client.Database(ns.Database).Collection(ns.Collection).Indexes().List(nil)
 
 				for cursor.Next(context.Background()) {
@@ -118,6 +117,6 @@ func (cui *CheckUniqueIndexExistsJob) Run() {
 	var err error
 	err = cui.innerRun()
 	if err != nil {
-		LOG.Crashf("%v", err)
+		l.Logger.Panicf("%v", err)
 	}
 }

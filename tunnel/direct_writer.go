@@ -1,12 +1,12 @@
 package tunnel
 
 import (
-	conf "github.com/alibaba/MongoShake/v2/collector/configure"
-	"github.com/alibaba/MongoShake/v2/executor"
-
 	utils "github.com/alibaba/MongoShake/v2/common"
 	nimo "github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
+
+	conf "github.com/alibaba/MongoShake/v2/collector/configure"
+	"github.com/alibaba/MongoShake/v2/executor"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 type DirectWriter struct {
@@ -25,7 +25,7 @@ func (writer *DirectWriter) Prepare() bool {
 	first := writer.RemoteAddrs[0]
 	if _, err := utils.NewMongoCommunityConn(first, utils.VarMongoConnectModeSecondaryPreferred, true,
 		utils.ReadWriteConcernDefault, utils.ReadWriteConcernDefault, conf.Options.TunnelMongoSslRootCaFile); err != nil {
-		LOG.Critical("target mongo server[%s] connect failed: %s", first, err.Error())
+		l.Logger.Errorf("target mongo server[%s] connect failed: %s", first, err.Error())
 		return false
 	}
 

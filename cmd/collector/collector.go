@@ -11,15 +11,15 @@ import (
 	"strconv"
 	"syscall"
 
+	nimo "github.com/gugemichael/nimo4go"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/collector/coordinator"
 	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	"github.com/alibaba/MongoShake/v2/quorum"
-
-	nimo "github.com/gugemichael/nimo4go"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	LOG "github.com/vinllen/log4go"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Exit struct{ Code int }
@@ -27,8 +27,6 @@ type Exit struct{ Code int }
 func main() {
 	var err error
 	defer handleExit()
-	defer LOG.Close()
-	defer utils.Goodbye()
 
 	// argument options
 	configuration := flag.String("conf", "", "configure file absolute path")
@@ -59,20 +57,29 @@ func main() {
 	}
 
 	// verify collector options and revise
+	if err = CheckDefaultValue(); err != nil {
+		crash(fmt.Sprintf("defalut Conf.Options check failed: %s", err.Error()), -4)
+	}
+
+	_ = utils.Mkdirs(conf.Options.LogDirectory)
+
+	err = l.New(conf.Options.LogLevel, conf.Options.LogDirectory, conf.Options.LogFileName,
+		conf.Options.LogMaxSizeMb, conf.Options.LogMaxBackup, conf.Options.LogMaxBackup, *verbose)
+	if err != nil {
+		crash(fmt.Sprintf("initial l.dir[%v] l.name[%v] failed[%v].", conf.Options.LogDirectory,
+			conf.Options.LogFileName, err), -2)
+	}
+
+	defer l.Logger.Sync()
+	defer utils.Goodbye()
+	l.Logger.Infof("log init succ. l.dir[%v] l.name[%v] l.level[%v]",
+		conf.Options.LogDirectory, conf.Options.LogFileName, conf.Options.LogLevel)
+
 	if err = SanitizeOptions(); err != nil {
 		crash(fmt.Sprintf("Conf.Options check failed: %s", err.Error()), -4)
 	}
 
-	if err := utils.InitialLogger(conf.Options.LogDirectory, conf.Options.LogFileName,
-		conf.Options.LogLevel, conf.Options.LogFlush, *verbose); err != nil {
-		crash(fmt.Sprintf("initial log.dir[%v] log.name[%v] failed[%v].", conf.Options.LogDirectory,
-			conf.Options.LogFileName, err), -2)
-	} else {
-		LOG.Info("log init succ. log.dir[%v] log.name[%v] log.level[%v]",
-			conf.Options.LogDirectory, conf.Options.LogFileName, conf.Options.LogLevel)
-	}
-	LOG.Info("MongoDB Version Source[%v] Target[%v]", conf.Options.SourceDBVersion, conf.Options.TargetDBVersion)
-
+	l.Logger.Infof("MongoDB Version Source[%v] Target[%v]", conf.Options.SourceDBVersion, conf.Options.TargetDBVersion)
 	conf.Options.Version = utils.BRANCH
 	if conf.Options.SystemProfilePort > 0 {
 		nimo.Profiling(conf.Options.SystemProfilePort)
@@ -83,12 +90,12 @@ func main() {
 	if signalProfile > 0 {
 		nimo.RegisterSignalForProfiling(syscall.Signal(signalProfile))                     // syscall.SIGUSR2
 		nimo.RegisterSignalForPrintStack(syscall.Signal(signalStack), func(bytes []byte) { // syscall.SIGUSR1
-			LOG.Info(string(bytes))
+			l.Logger.Info(string(bytes))
 		})
 	}
 
 	utils.Welcome()
-	_ = utils.Mkdirs(conf.Options.LogDirectory)
+
 	// get exclusive process lock and write pid
 	if utils.WritePidById(conf.Options.LogDirectory, conf.Options.Id) {
 		startup()
@@ -152,13 +159,13 @@ func startup() {
 			_ = http.ListenAndServe(fmt.Sprintf(":%d", conf.Options.PromHTTPListenPort), nil)
 		}()
 	} else {
-		LOG.Warn("PromHTTPListenPort is undefined, will not listen on any port")
+		l.Logger.Warn("PromHTTPListenPort is undefined, will not listen on any port")
 	}
 
 	// start mongodb replication
 	if err := coordinator.Run(); err != nil {
 		// initial or connection established failed
-		LOG.Critical(fmt.Sprintf("run replication failed: %v", err))
+		l.Logger.Errorf("run replication failed: %v", err)
 		crash(err.Error(), -6)
 	}
 

@@ -2,6 +2,13 @@ package docsyncer
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"go.mongodb.org/mongo-driver/bson"
+
 	"github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/collector/filter"
 	"github.com/alibaba/MongoShake/v2/collector/transform"
@@ -9,12 +16,6 @@ import (
 	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/alibaba/MongoShake/v2/sharding"
 	"github.com/alibaba/MongoShake/v2/unit_test_common"
-	"sort"
-	"strings"
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 const (

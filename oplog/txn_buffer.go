@@ -6,15 +6,16 @@
 
 // Package txn implements functions for examining and processing transaction
 // oplog entries.
+
 package oplog
 
 import (
 	"errors"
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 var ErrBufferClosed = errors.New("transaction buffer already closed")
@@ -313,8 +314,9 @@ const extractErrorFmt = "error extracting transaction ops: %s: %v"
 
 // ExtractInnerOps
 // doc.applyOps[i].ts（Let ckpt use the last ts to judge complete）
-//     applyOps[0 - n-1].ts = doc.ts - 1
-//     applyOps[n-1].ts = doc.ts
+//
+//	applyOps[0 - n-1].ts = doc.ts - 1
+//	applyOps[n-1].ts = doc.ts
 func ExtractInnerOps(tranOp *ParsedLog) ([]ParsedLog, error) {
 	doc := tranOp.Object
 	rawAO, err := findValueByKey("applyOps", &doc)

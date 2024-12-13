@@ -1,9 +1,9 @@
 package conf
 
 import (
-	utils "github.com/alibaba/MongoShake/v2/common"
-
 	"github.com/getlantern/deepcopy"
+
+	utils "github.com/alibaba/MongoShake/v2/common"
 )
 
 type Configuration struct {
@@ -11,6 +11,14 @@ type Configuration struct {
 	ConfVersion uint `config:"conf.version"` // do not modify the tag name
 
 	// 1. global
+	LogLevel     string `config:"log.level"`
+	LogDirectory string `config:"log.dir"`
+	LogFileName  string `config:"log.file"`
+	LogFlush     bool   `config:"log.flush"`
+	LogMaxSizeMb int    `config:"log.max_size_mb"`
+	LogMaxBackup int    `config:"log.max_backup"`
+	LogMaxAge    int    `config:"log.max_age"`
+
 	Id                                     string   `config:"id"`
 	MasterQuorum                           bool     `config:"master_quorum"`
 	MasterQuorumObjectId                   string   `config:"master_quorum.objectId"`
@@ -19,10 +27,6 @@ type Configuration struct {
 	IncrSyncHTTPListenPort                 int      `config:"incr_sync.http_port"`
 	SystemProfilePort                      int      `config:"system_profile_port"`
 	RAG                                    string   `config:"rag"`
-	LogLevel                               string   `config:"log.level"`
-	LogDirectory                           string   `config:"log.dir"`
-	LogFileName                            string   `config:"log.file"`
-	LogFlush                               bool     `config:"log.flush"`
 	SyncMode                               string   `config:"sync_mode"`
 	MongoUrls                              []string `config:"mongo_urls"`
 	MongoCsUrl                             string   `config:"mongo_cs_url"`

@@ -3,18 +3,18 @@ package oplog
 import (
 	"context"
 	"fmt"
-	LOG "github.com/vinllen/log4go"
+	"strings"
+	"testing"
+
+	nimo "github.com/gugemichael/nimo4go"
+	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"strings"
-	"testing"
 
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	"github.com/alibaba/MongoShake/v2/unit_test_common"
-
-	nimo "github.com/gugemichael/nimo4go"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -64,9 +64,9 @@ func ApplyOpsFilter(key string) bool {
 	return false
 }
 func RunCommand(database, operation string, log *PartialLog, client *mongo.Client) error {
-	defer LOG.Debug("RunCommand run DDL: %v", log.Dump(nil, true))
+	defer l.Logger.Debugf("RunCommand run DDL: %v", log.Dump(nil, true))
 	dbHandler := client.Database(database)
-	LOG.Info("RunCommand run DDL with type[%s]", operation)
+	l.Logger.Infof("RunCommand run DDL with type[%s]", operation)
 	var err error
 	switch operation {
 	case "createIndexes":
@@ -161,7 +161,7 @@ func RunCommand(database, operation string, log *PartialLog, client *mongo.Clien
 			err = client.Database("admin").RunCommand(nil, log.Object).Err()
 		}
 	default:
-		LOG.Info("type[%s] not found, use applyOps", operation)
+		l.Logger.Info("type[%s] not found, use applyOps", operation)
 
 		// filter log.Object
 		var rec bson.D

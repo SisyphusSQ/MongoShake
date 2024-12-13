@@ -1,13 +1,13 @@
 package replayer
 
 import (
+	"go.mongodb.org/mongo-driver/bson"
+
 	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 	module "github.com/alibaba/MongoShake/v2/modules"
 	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/alibaba/MongoShake/v2/tunnel"
-	"go.mongodb.org/mongo-driver/bson"
-
-	LOG "github.com/vinllen/log4go"
 )
 
 const (
@@ -34,7 +34,7 @@ type MessageWithCallback struct {
 }
 
 func NewExampleReplayer(id int) *ExampleReplayer {
-	LOG.Info("ExampleReplayer start. pending queue capacity %d", PendingQueueCapacity)
+	l.Logger.Infof("ExampleReplayer start. pending queue capacity %d", PendingQueueCapacity)
 	er := &ExampleReplayer{
 		pendingQueue: make(chan *MessageWithCallback, PendingQueueCapacity),
 		id:           id,
@@ -69,7 +69,7 @@ func (er *ExampleReplayer) Sync(message *tunnel.TMessage, completion func()) int
 		if recalculated != message.Checksum {
 			// we need the peer to retransmission the current message
 			er.Retransmit = true
-			LOG.Critical("Tunnel message checksum bad. recalculated is 0x%x. origin is 0x%x", recalculated, message.Checksum)
+			l.Logger.Errorf("Tunnel message checksum bad. recalculated is 0x%x. origin is 0x%x", recalculated, message.Checksum)
 			return tunnel.ReplyChecksumInvalid
 		}
 	}
@@ -80,7 +80,7 @@ func (er *ExampleReplayer) Sync(message *tunnel.TMessage, completion func()) int
 		var err error
 		if er.compressor, err = module.GetCompressorById(message.Compress); err != nil {
 			er.Retransmit = true
-			LOG.Critical("Tunnel message compressor not support. is %d", message.Compress)
+			l.Logger.Errorf("Tunnel message compressor not support. is %d", message.Compress)
 			return tunnel.ReplyCompressorNotSupported
 		}
 		var decompress [][]byte
@@ -92,7 +92,7 @@ func (er *ExampleReplayer) Sync(message *tunnel.TMessage, completion func()) int
 		}
 		if len(decompress) != len(message.RawLogs) {
 			er.Retransmit = true
-			LOG.Critical("Decompress result isn't equivalent. len(decompress) %d, len(Logs) %d", len(decompress), len(message.RawLogs))
+			l.Logger.Errorf("Decompress result isn't equivalent. len(decompress) %d, len(Logs) %d", len(decompress), len(message.RawLogs))
 			return tunnel.ReplyDecompressInvalid
 		}
 
@@ -124,10 +124,10 @@ func (er *ExampleReplayer) handler() {
 			oplogs[i] = oplog.ParsedLog{}
 			if err := bson.Unmarshal(raw, &oplogs[i]); err != nil {
 				// impossible switch, need panic and exit
-				LOG.Crashf("unmarshal oplog[%v] failed[%v]", raw, err)
+				l.Logger.Panicf("unmarshal oplog[%v] failed[%v]", raw, err)
 				return
 			}
-			LOG.Info(oplogs[i]) // just print for test, users can modify to fulfill different needs
+			l.Logger.Infof("%v", oplogs[i]) // just print for test, users can modify to fulfill different needs
 			// fmt.Println(oplogs[i])
 		}
 
@@ -140,7 +140,7 @@ func (er *ExampleReplayer) handler() {
 		lastTs := utils.TimeStampToInt64(oplogs[n-1].Timestamp)
 		er.Ack = lastTs
 
-		LOG.Debug("handle ack[%v]", er.Ack)
+		l.Logger.Debugf("handle ack[%v]", er.Ack)
 
 		// add logical code below
 	}

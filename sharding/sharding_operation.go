@@ -6,13 +6,13 @@ import (
 	"reflect"
 	"strings"
 
-	conf "github.com/alibaba/MongoShake/v2/collector/configure"
-	utils "github.com/alibaba/MongoShake/v2/common"
-	"github.com/alibaba/MongoShake/v2/oplog"
-
-	LOG "github.com/vinllen/log4go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+
+	conf "github.com/alibaba/MongoShake/v2/collector/configure"
+	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
+	"github.com/alibaba/MongoShake/v2/oplog"
 )
 
 const (
@@ -94,7 +94,7 @@ func GetChunkMapByUrl(csUrl string) (ShardingChunkMap, error) {
 	for shardCursor.Next(context.Background()) {
 		err = shardCursor.Decode(&shardDoc)
 		if err != nil {
-			LOG.Warn("GetChunkMapByUrl Decode Failed, err[%v]", err)
+			l.Logger.Warnf("GetChunkMapByUrl Decode Failed, err[%v]", err)
 			continue
 		}
 
@@ -118,7 +118,7 @@ func GetChunkMapByUrl(csUrl string) (ShardingChunkMap, error) {
 	for chunkCursor.Next(context.Background()) {
 		err = chunkCursor.Decode(&chunkDoc)
 		if err != nil {
-			LOG.Warn("GetChunkMapByUrl Decode Failed, err[%v]", err)
+			l.Logger.Warnf("GetChunkMapByUrl Decode Failed, err[%v]", err)
 			continue
 		}
 
@@ -183,7 +183,7 @@ func GetColShardType(conn *utils.MongoCommunityConn, namespace string) ([]string
 	}
 
 	for _, item := range colDoc {
-		LOG.Debug("item: %v", item)
+		l.Logger.Debugf("item: %v", item)
 
 		// either be a single hashed field, or a list of ascending fields
 		switch v := item.Value.(type) {

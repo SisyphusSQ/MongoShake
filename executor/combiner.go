@@ -1,7 +1,7 @@
 package executor
 
 import (
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 type OplogsGroup struct {
@@ -43,7 +43,7 @@ func (combiner LogsGroupCombiner) mergeToGroups(logs []*OplogRecord) (groups []*
 			sizeInGroup += log.original.partialLog.RawSize // add size
 		} else {
 			if sizeInGroup != 0 {
-				LOG.Debug("mergeToGroups merge log with total size[%v]", sizeInGroup)
+				l.Logger.Debugf("mergeToGroups merge log with total size[%v]", sizeInGroup)
 			}
 
 			// new start of a group
@@ -55,8 +55,7 @@ func (combiner LogsGroupCombiner) mergeToGroups(logs []*OplogRecord) (groups []*
 		forceSplit = log.wait != nil
 	}
 
-	LOG.Debug("mergeToGroups merge group with total number[%v]", len(groups))
-
+	l.Logger.Debugf("mergeToGroups merge group with total number[%v]", len(groups))
 	return
 }
 

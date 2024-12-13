@@ -1,11 +1,10 @@
 package utils
 
 import (
+	"math"
 	"time"
 
-	"math"
-
-	LOG "github.com/vinllen/log4go"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 type Qos struct {
@@ -57,7 +56,7 @@ FOR:
 		}
 	}
 
-	LOG.Info("clear old channel, set new bucket size[%v]", q.Limit)
+	l.Logger.Infof("clear old channel, set new bucket size[%v]", q.Limit)
 	q.bucket = make(chan struct{}, q.Limit)
 }
 
@@ -69,7 +68,7 @@ func (q *Qos) timer() {
 		}
 
 		if *q.addr != q.prevLimit {
-			LOG.Info("try to resize bucket channel from %v to %v, bucket size[%v], ticket[%v]",
+			l.Logger.Infof("try to resize bucket channel from %v to %v, bucket size[%v], ticket[%v]",
 				q.prevLimit, *q.addr, q.Limit, q.Ticket)
 			q.prevLimit = *q.addr
 			// 0 is ok

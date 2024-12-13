@@ -1,13 +1,14 @@
 package executor
 
 import (
-	utils "github.com/alibaba/MongoShake/v2/common"
-	"github.com/alibaba/MongoShake/v2/oplog"
 	nimo "github.com/gugemichael/nimo4go"
-	LOG "github.com/vinllen/log4go"
-	bson "go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+
+	utils "github.com/alibaba/MongoShake/v2/common"
+	l "github.com/alibaba/MongoShake/v2/lib/log"
+	"github.com/alibaba/MongoShake/v2/oplog"
 )
 
 const (
@@ -48,21 +49,21 @@ type BasicWriter interface {
 // NewDbWriter oplog writer
 func NewDbWriter(conn *utils.MongoCommunityConn, metadata bson.M, bulkInsert bool, fullFinishTs int64) BasicWriter {
 	if !bulkInsert { // bulk insertion disable
-		// LOG.Info("db writer create: SingleWriter")
+		// l.Logger.Info("db writer create: SingleWriter")
 		return &SingleWriter{conn: conn, fullFinishTs: fullFinishTs}
 	} else if _, ok := metadata["g"]; ok {
 		// has gid
-		// LOG.Info("db writer create: CommandWriter")
+		// l.Logger.Info("db writer create: CommandWriter")
 		return &CommandWriter{conn: conn, fullFinishTs: fullFinishTs}
 	}
-	// LOG.Info("db writer create: BulkWriter")
+	// l.Logger.Info("db writer create: BulkWriter")
 	return &BulkWriter{conn: conn, fullFinishTs: fullFinishTs} // bulk insertion enable
 }
 
 func RunCommand(database, operation string, log *oplog.PartialLog, client *mongo.Client) error {
-	defer LOG.Debug("RunCommand run DDL: %v", log.Dump(nil, true))
+	defer l.Logger.Debugf("RunCommand run DDL: %v", log.Dump(nil, true))
 	dbHandler := client.Database(database)
-	LOG.Info("RunCommand run DDL with type[%s]", operation)
+	l.Logger.Infof("RunCommand run DDL with type[%s]", operation)
 	var err error
 	switch operation {
 	case "createIndexes":
@@ -121,7 +122,7 @@ func RunCommand(database, operation string, log *oplog.PartialLog, client *mongo
 		}
 
 		nimo.AssertTrue(len(indexes) >= 2, "indexes must at least have two elements")
-		LOG.Debug("RunCommand commitIndexBuild oplog after conversion[%v]", indexes)
+		l.Logger.Debugf("RunCommand commitIndexBuild oplog after conversion[%v]", indexes)
 		err = dbHandler.RunCommand(nil, indexes).Err()
 	case "applyOps":
 		/*
@@ -193,7 +194,7 @@ func RunCommand(database, operation string, log *oplog.PartialLog, client *mongo
 			err = client.Database("admin").RunCommand(nil, log.Object).Err()
 		}
 	default:
-		LOG.Info("type[%s] not found, use applyOps", operation)
+		l.Logger.Infof("type[%s] not found, use applyOps", operation)
 
 		// filter log.Object
 		var rec bson.D
@@ -219,7 +220,7 @@ func RunCommand(database, operation string, log *oplog.PartialLog, client *mongo
 	return err
 }
 
-// true means error can be ignored
+// IgnoreError true means error can be ignored
 // https://github.com/mongodb/mongo/blob/master/src/mongo/base/error_codes.yml
 func IgnoreError(err error, op string, isFullSyncStage bool) bool {
 	if err == nil {

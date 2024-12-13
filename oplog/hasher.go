@@ -1,9 +1,10 @@
 package oplog
 
 import (
-	LOG "github.com/vinllen/log4go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	l "github.com/alibaba/MongoShake/v2/lib/log"
 )
 
 const (
@@ -69,7 +70,7 @@ func (objectIdHasher *PrimaryKeyHasher) DistributeOplogByMod(log *PartialLog, mo
 	}
 
 	if hashObject == nil {
-		LOG.Warn("Couldn't extract hash object. collector has mixed up. use Oplog.Namespace instead %v", log)
+		l.Logger.Warnf("Couldn't extract hash object. collector has mixed up. use Oplog.Namespace instead %v", log)
 		hashObject = log.Namespace
 	}
 
@@ -135,7 +136,7 @@ func GetIdOrNSFromOplog(log *PartialLog) interface{} {
 	case "c":
 		return log.Namespace
 	default:
-		LOG.Critical("Unrecognized oplog object operation %s", log.Operation)
+		l.Logger.Errorf("Unrecognized oplog object operation %s", log.Operation)
 	}
 
 	return log.Namespace
@@ -163,9 +164,9 @@ func Hash(hashObject interface{}) uint32 {
 	case int:
 		return uint32(object)
 	case nil:
-		LOG.Warn("Hash object is NIL. use default value %d", DefaultHashValue)
+		l.Logger.Warnf("Hash object is NIL. use default value %d", DefaultHashValue)
 	default:
-		LOG.Warn("Hash object is UNKNOWN type[%T], value is [%v]. use default value %d",
+		l.Logger.Warnf("Hash object is UNKNOWN type[%T], value is [%v]. use default value %d",
 			hashObject, hashObject, DefaultHashValue)
 	}
 
