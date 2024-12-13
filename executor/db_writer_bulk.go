@@ -153,7 +153,7 @@ func (bw *BulkWriter) doUpdate(database, collection string, metadata bson.M,
 					SetUpdate(newObject).SetUpsert(true))
 			} else {
 				if upsert {
-					l.Logger.Warnf("doUpdate runs upsert but lack documentKey: %v", log.original.partialLog)
+					l.Logger.Debugf("doUpdate runs upsert but lack documentKey: %v", log.original.partialLog)
 				}
 
 				model := mongo.NewUpdateOneModel().

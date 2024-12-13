@@ -190,7 +190,7 @@ func (sw *SingleWriter) doUpdate(database, collection string, metadata bson.M,
 					update, opts)
 			} else {
 				if upsert {
-					l.Logger.Warnf("doUpdate runs upsert but lack documentKey: %v", log.original.partialLog)
+					l.Logger.Debugf("doUpdate runs upsert but lack documentKey: %v", log.original.partialLog)
 				}
 
 				res, err = collectionHandle.UpdateOne(context.Background(), log.original.partialLog.Query,
