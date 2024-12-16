@@ -51,7 +51,7 @@ func New(logLevel, logDir, logFile string, maxSize, maxBackup, maxAge, verbose i
 	} else {
 		fn = logDir + "/" + logFile
 	}
-	if err := initRotate(fn); err != nil {
+	if err = initRotate(fn); err != nil {
 		panic(err)
 	}
 
@@ -133,6 +133,9 @@ func initRotate(fn string) error {
 		}
 	}
 
+	if err != nil && strings.Contains(err.Error(), "no such file or directory") {
+		return nil
+	}
 	return err
 }
 
