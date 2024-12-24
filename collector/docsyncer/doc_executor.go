@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/alibaba/MongoShake/v2/lib/retry"
 	"hash/crc32"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -369,10 +371,27 @@ func (exec *MsgExecutor) doSync(docs []*bson.Raw) error {
 
 	var (
 		ns  = exec.colExecutor.ns.Str()
-		pid = int32(int(crc32.ChecksumIEEE([]byte(ns))) % conf.Options.TunnelKafkaPartitionNumber)
+		pid int32
+		//pid = int32(int(crc32.ChecksumIEEE([]byte(ns))) % conf.Options.TunnelKafkaPartitionNumber)
 		//pid = rand.Int32N(9)
 		//total = conf.Options.TunnelKafkaPartitionNumber
 	)
+
+	if conf.Options.FullSyncReaderParallelIndex == "_id" {
+		b := docs[0].Lookup("_id")
+		switch b.Type {
+		case bson.TypeObjectID:
+			v := b.ObjectID()
+			pid = int32(int(crc32.ChecksumIEEE([]byte(v.Hex()))) % conf.Options.TunnelKafkaPartitionNumber)
+		case bson.TypeString:
+			v := b.String()
+			pid = int32(int(crc32.ChecksumIEEE([]byte(v))) % conf.Options.TunnelKafkaPartitionNumber)
+		default:
+			pid = rand.Int32N(int32(conf.Options.TunnelKafkaPartitionNumber))
+		}
+	} else {
+		pid = int32(int(crc32.ChecksumIEEE([]byte(ns))) % conf.Options.TunnelKafkaPartitionNumber)
+	}
 
 	for _, doc := range docs {
 		if conf.Options.FullSyncExecutorFilterOrphanDocument && exec.syncer.orphanFilter != nil {
@@ -416,9 +435,17 @@ func (exec *MsgExecutor) doSync(docs []*bson.Raw) error {
 			continue
 		}
 
-		err = exec.asyncer.Send(encode, pid)
+		err = retry.Do(func() error {
+			err = exec.asyncer.Send(encode, pid)
+			if err != nil {
+				l.Logger.Errorf("doSync async send [%s] failed, msg will retry. err: %v", string(encode), err)
+				return err
+			}
+
+			return nil
+		}, 10, 2*time.Second)
 		if err != nil {
-			l.Logger.Errorf("doSync async send %s failed. %v", string(encode), err)
+			l.Logger.Errorf("doSync async send [%s] failed. err: %v", string(encode), err)
 			return err
 		}
 	}

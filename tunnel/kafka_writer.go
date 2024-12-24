@@ -302,7 +302,13 @@ func (tunnel *KafkaWriter) writeKafka() {
 				}
 				debugF.Write([]byte{10})
 			} else {
+				var retries int
 				for {
+					if retries == 60 {
+						l.Logger.Panicf("%s send [%v] with type[%v] reach retreis[%d],panic mongoshake, and please check kafka",
+							tunnel, tunnel.RemoteAddr, conf.Options.TunnelMessage, retries)
+					}
+
 					pid := int32(int(crc32.ChecksumIEEE([]byte(data.ns))) % conf.Options.TunnelKafkaPartitionNumber)
 					if err = tunnel.writer.Send(data.log, pid); err != nil {
 						l.Logger.Errorf("%s send [%v] with type[%v] error[%v]", tunnel, tunnel.RemoteAddr,
@@ -310,6 +316,7 @@ func (tunnel *KafkaWriter) writeKafka() {
 
 						tunnel.state = ReplyError
 						time.Sleep(time.Second)
+						retries++
 					} else {
 						break
 					}

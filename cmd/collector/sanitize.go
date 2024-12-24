@@ -431,8 +431,8 @@ func checkConflict() error {
 	if conf.Options.TunnelKafkaPartitionNumber <= 0 {
 		conf.Options.TunnelKafkaPartitionNumber = 1
 	} else if conf.Options.TunnelKafkaPartitionNumber > conf.Options.IncrSyncWorker {
-		return fmt.Errorf("tunnel.kafka.partition[%v] number should <= incr_sync.worker number[%v]",
-			conf.Options.TunnelKafkaPartitionNumber, conf.Options.IncrSyncWorker)
+		//return fmt.Errorf("tunnel.kafka.partition[%v] number should <= incr_sync.worker number[%v]",
+		//	conf.Options.TunnelKafkaPartitionNumber, conf.Options.IncrSyncWorker)
 	}
 	conf.Options.IncrSyncCollisionEnable = conf.Options.IncrSyncExecutor != 1
 	if conf.Options.Tunnel != utils.VarTunnelDirect && conf.Options.SyncMode != utils.VarSyncModeIncr {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	prometheusmetrics "github.com/deathowl/go-metrics-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rcrowley/go-metrics"
 
@@ -71,8 +70,8 @@ func NewConfig(rootCaFile string) (*Config, error) {
 		config.Net.TLS.Enable = true
 	}
 
-	pClient := prometheusmetrics.NewPrometheusProvider(metricsRegistry, nsDefault, "", prometheusRegistry, 1*time.Second)
-	go pClient.UpdatePrometheusMetrics()
+	//pClient := prometheusmetrics.NewPrometheusProvider(metricsRegistry, nsDefault, "", prometheusRegistry, 1*time.Second)
+	//go pClient.UpdatePrometheusMetrics()
 
 	return &Config{
 		Config: config,

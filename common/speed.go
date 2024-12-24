@@ -51,7 +51,7 @@ FOR:
 		select {
 		case <-q.bucket:
 		default:
-			// break if bucket if empty
+			// break if bucket is empty
 			break FOR
 		}
 	}
@@ -81,7 +81,7 @@ func (q *Qos) timer() {
 			select {
 			case q.bucket <- struct{}{}:
 			default:
-				// break if bucket if full
+				// break if bucket is full
 				break INJECT
 			}
 		}

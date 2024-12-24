@@ -550,8 +550,6 @@ func (syncer *DBSyncer) splitSync(reader *DocumentReader, colExecutor *Collectio
 			}
 		}
 
-		// todo 这里转换成kafka Message
-
 		buffer = append(buffer, &doc)
 		bufferByteSize += len(doc)
 	}
