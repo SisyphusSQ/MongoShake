@@ -103,6 +103,18 @@ func main() {
 }
 
 func startup() {
+	// init prometheus
+	utils.InitProm()
+
+	if conf.Options.PromHTTPListenPort > 0 {
+		go func() {
+			http.Handle("/metrics", promhttp.Handler())
+			_ = http.ListenAndServe(fmt.Sprintf(":%d", conf.Options.PromHTTPListenPort), nil)
+		}()
+	} else {
+		l.Logger.Warn("PromHTTPListenPort is undefined, will not listen on any port")
+	}
+
 	// leader election at the beginning
 	selectLeader()
 
@@ -148,18 +160,6 @@ func startup() {
 		coordinator.MongoCS = &utils.MongoSource{
 			URL: conf.Options.MongoCsUrl,
 		}
-	}
-
-	// init prometheus
-	utils.InitProm()
-
-	if conf.Options.PromHTTPListenPort > 0 {
-		go func() {
-			http.Handle("/metrics", promhttp.Handler())
-			_ = http.ListenAndServe(fmt.Sprintf(":%d", conf.Options.PromHTTPListenPort), nil)
-		}()
-	} else {
-		l.Logger.Warn("PromHTTPListenPort is undefined, will not listen on any port")
 	}
 
 	// start mongodb replication

@@ -443,9 +443,10 @@ func (exec *MsgExecutor) doSync(docs []*bson.Raw) error {
 			}
 
 			return nil
-		}, 10, 2*time.Second)
+		}, 100, 1*time.Second)
 		if err != nil {
 			l.Logger.Errorf("doSync async send [%s] failed. err: %v", string(encode), err)
+			//continue
 			return err
 		}
 	}
