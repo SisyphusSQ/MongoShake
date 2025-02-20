@@ -126,6 +126,14 @@ var DiskReadCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "on_disk_read_count",
 }, []string{"name"})
 
+var OplogGetDelay = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "oplog_get_delay",
+}, []string{"stage"})
+
+var OplogPutDelay = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "oplog_put_delay",
+}, []string{"stage"})
+
 func InitProm() {
 	prometheus.MustRegister(
 		OplogFilterProm, OplogGetProm, OplogConsumeProm, OplogApplyProm, OplogSuccessProm, OplogFailProm,
@@ -133,6 +141,6 @@ func InitProm() {
 		LSNAckProm, LSNCheckpointProm, OplogMaxSizeProm, OplogAvgSizeProm, TableOperationsProm, ReplStatusProm,
 		FulProgressProm, FulColNumProm, FulFinColNumProm, FulProColNumProm, FulWaitColNumProm,
 		FulColPerRowProm, FulColProRowProm, FulColTotRowProm, DiskBufferSize, DiskBufferUsed,
-		DiskEnableDiskPersist, DiskFetchStage, DiskWriteCount, DiskReadCount,
+		DiskEnableDiskPersist, DiskFetchStage, DiskWriteCount, DiskReadCount, OplogGetDelay, OplogPutDelay,
 	)
 }

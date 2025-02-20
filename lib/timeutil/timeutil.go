@@ -7,6 +7,7 @@ import (
 )
 
 var (
+	utc = time.UTC
 	cst *time.Location
 )
 
@@ -15,6 +16,7 @@ const (
 	DateLayout   = "2006-01-02"
 	CSTLayout    = "2006-01-02 15:04:05"
 	outputLayout = "2006-01-02 15:04:00"
+	withTZLayout = "2006-01-02T15:04:05.999Z"
 )
 
 func init() {
@@ -147,4 +149,13 @@ func GetDateFromTimeStr(str string) (string, error) {
 	}
 
 	return t.Format(DateLayout), nil
+}
+
+func TranWallToTime(str string) (int64, error) {
+	t, err := time.ParseInLocation(withTZLayout, str, utc)
+	if err != nil {
+		return 0, err
+	}
+	
+	return t.UnixMilli(), nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -49,6 +50,7 @@ type ParsedLog struct {
 	DocumentKey   bson.D              `bson:"documentKey,omitempty" json:"documentKey,omitempty"` // exists when source collection is sharded, only including shard key and _id
 	PrevOpTime    bson.Raw            `bson:"prevOpTime,omitempty"`
 	UI            *primitive.Binary   `bson:"ui,omitempty" json:"ui,omitempty"` // do not enable currently
+	Wall          *time.Time          `bson:"wall,omitempty" json:"wall,omitempty"`
 }
 
 type PartialLog struct {

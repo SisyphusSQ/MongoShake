@@ -3,6 +3,7 @@ package oplog
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -86,6 +87,11 @@ func ConvertEvent2Oplog(input []byte, fulldoc bool) (*PartialLog, error) {
 	oplog := new(PartialLog)
 	// ts
 	oplog.Timestamp = event.ClusterTime
+
+	// wall
+	wall := time.Unix(int64(event.ClusterTime.T), 0).UTC()
+	oplog.Wall = &wall
+
 	// transaction number
 	oplog.TxnNumber = event.TxnNumber
 	// lsid

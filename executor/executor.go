@@ -252,11 +252,15 @@ func (exec *Executor) doSync(logs []*OplogRecord) error {
 	// can be accomplished in single MongoDB request. groups
 	// in this executor will be sequential
 	oplogGroups := LogsGroupCombiner{maxGroupNr: OplogsMaxGroupNum, maxGroupSize: OplogsMaxGroupSize}.mergeToGroups(transLogs)
+	start := time.Now()
 	for _, group := range oplogGroups {
 		if err := exec.execute(group); err != nil {
 			return err
 		}
 	}
+
+	// calculate put delay
+	utils.OplogPutDelay.WithLabelValues("incr").Set(float64(time.Since(start).Milliseconds()))
 
 	l.Logger.Infof("Replayer-%d Executor-%d doSync oplogRecords received[%d] merged[%d]. merge to %.2f%% chunks",
 		exec.batchExecutor.ReplayerId, exec.id, count, len(oplogGroups), float32(len(oplogGroups))*100.00/float32(count))
