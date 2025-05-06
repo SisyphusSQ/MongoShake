@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/alibaba/MongoShake/v2/lib/retry"
 	"hash/crc32"
 	"math/rand/v2"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
 	l "github.com/alibaba/MongoShake/v2/lib/log"
+	"github.com/alibaba/MongoShake/v2/lib/retry"
 	"github.com/alibaba/MongoShake/v2/oplog"
 	"github.com/alibaba/MongoShake/v2/tunnel/kafka"
 )
@@ -264,9 +264,10 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 		for _, wError := range (err.(mongo.BulkWriteException)).WriteErrors {
 			if utils.DuplicateKey(wError) {
 				if !conf.Options.FullSyncExecutorInsertOnDupUpdate {
-					return fmt.Errorf("duplicate key error[%v], you can clean the document on the target mongodb, "+
-						"or enable %v to solve, but full-sync stage needs restart",
-						wError, "full_sync.executor.insert_on_dup_update")
+					//return fmt.Errorf("duplicate key error[%v], you can clean the document on the target mongodb, "+
+					//	"or enable %v to solve, but full-sync stage needs restart",
+					//	wError, "full_sync.executor.insert_on_dup_update")
+					continue
 				}
 
 				dupDocument := *docs[wError.Index]
@@ -299,8 +300,6 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 			}
 			l.Logger.Debugf("updateForInsert succ updateModels.len:%d updateModules[0]:%v\n",
 				len(updateModels), updateModels[0])
-		} else {
-			return fmt.Errorf("bulk run failed[%v]", err)
 		}
 	}
 
