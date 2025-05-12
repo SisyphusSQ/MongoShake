@@ -128,7 +128,7 @@ var DiskReadCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 
 var OplogGetDelay = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "oplog_get_delay",
-}, []string{"stage"})
+}, []string{"name", "stage"})
 
 var OplogPutDelay = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "oplog_put_delay",

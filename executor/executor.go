@@ -229,9 +229,9 @@ func (exec *Executor) start() {
 		exec.finisher.Add(-len(toBeExecuted))
 
 		// records all oplogRecords if enabled. After write successfully
-		for _, log := range toBeExecuted {
-			exec.journal.WriteRecord(log.original.partialLog)
-		}
+		//for _, log := range toBeExecuted {
+		//	exec.journal.WriteRecord(log.original.partialLog)
+		//}
 	}
 }
 

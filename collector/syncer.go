@@ -511,12 +511,12 @@ func (sync *OplogSyncer) deserializer(index int) {
 
 			if deserializeLogs[0].Parsed.Wall != nil {
 				getDelay := time.Now().In(time.UTC).UnixMilli() - deserializeLogs[0].Parsed.Wall.UnixMilli()
-				utils.OplogGetDelay.WithLabelValues("incr").Set(float64(getDelay))
+				utils.OplogGetDelay.WithLabelValues(sync.Replset, "incr").Set(float64(getDelay))
 			} else {
 				// if mongodb version le 3.4.x, no wall time
 				// get from clusterTime
 				getDelay := time.Now().In(time.UTC).UnixMilli() - time.Unix(int64(sync.LastFetchTs.T), 0).UTC().UnixMilli()
-				utils.OplogGetDelay.WithLabelValues("incr").Set(float64(getDelay))
+				utils.OplogGetDelay.WithLabelValues(sync.Replset, "incr").Set(float64(getDelay))
 			}
 
 		}
