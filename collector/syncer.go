@@ -1,7 +1,9 @@
 package collector
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -31,13 +33,29 @@ const (
 	PipelineQueueMinNr    = utils.VarSyncerPipelineQueueMinNr
 	PipelineQueueLen      = utils.VarSyncerPipelineQueueLen
 
-	SyncerFetchErrorRetryMs       = utils.VarSyncerFetchErrorRetryMs
-	FilterCheckpointGap           = utils.VarSyncerFilterCheckpointGap
-	FilterCheckpointCheckInterval = utils.VarSyncerFilterCheckpointCheckInterval
-	CheckCheckpointUpdateTimes    = utils.VarSyncerCheckCheckpointUpdateTimes
+	SyncerFetchErrorRetryMs             = utils.VarSyncerFetchErrorRetryMs
+	FilterCheckpointGap                 = utils.VarSyncerFilterCheckpointGap
+	FilterCheckpointCheckInterval       = utils.VarSyncerFilterCheckpointCheckInterval
+	BarrierCheckpointLogInterval        = 3 * time.Second
+	BarrierCheckpointErrorRetryInterval = 900 * time.Millisecond
+	BarrierInterruptedRetryInterval     = 300 * time.Millisecond
+
+	// Deprecated: barrier logging is now limited by elapsed time.
+	CheckCheckpointUpdateTimes = utils.VarSyncerCheckCheckpointUpdateTimes
 )
 
+// DDLCheckpointInterval is retained for source compatibility.
+// Deprecated: use BarrierCheckpointInterval. This legacy value no longer
+// controls barrier polling or worker probes.
 var DDLCheckpointInterval int64 = utils.VarSyncerDDLCheckpointIntervalMs
+
+// ACK notifications wake barriers immediately. Fallback polling observes
+// missed notifications and sentinel changes; checkpoint I/O has its own retry
+// deadline so frequent notifications cannot amplify failed writes.
+var (
+	BarrierCheckpointInterval      = time.Duration(utils.VarSyncerBarrierCheckpointIntervalMs) * time.Millisecond
+	BarrierCheckpointRetryInterval = 300 * time.Millisecond
+)
 
 var barrierCkptGetFunc = func(sync *OplogSyncer) (*ckpt.CheckpointContext, error) {
 	checkpoint, _, err := sync.ckptManager.Get()
@@ -64,10 +82,18 @@ type OplogSyncer struct {
 	Replset string
 	// oplog start position of source mongodb
 	startPosition interface{}
-	// full sync finish position, used to check DDL between full sync and incr sync
+	// full sync finish position, used to check DDL between full sync and incr sync.
+	// Deliberately NOT updated by the parallel/restart window backfill (#1047):
+	// activating the batcher's DDL-before-fullFinish panic guard on those paths
+	// would crash deployments whose full sync overlapped DDL oplogs. The writer
+	// overlap window is plumbed separately via Worker.SetInitSyncFinishTs.
 	fullSyncFinishPosition primitive.Timestamp
 
 	ckptManager *ckpt.CheckpointManager
+	// ckptReady is closed once Start() has created the checkpoint manager and
+	// loadCheckpoint has run Get(). The parallel-mode backfill waits on it so
+	// it never touches ckptManager concurrently with Start() (#1050 review B1).
+	ckptReady chan struct{}
 
 	// oplog hash strategy
 	hasher oplog.Hasher
@@ -97,6 +123,10 @@ type OplogSyncer struct {
 	startTime time.Time
 	ckptTime  time.Time
 
+	// Coalesced ACK notifications are hints only; checkpoint and worker-ACK
+	// safety conditions are rechecked before a barrier can be released.
+	workerAckNotify chan struct{}
+
 	replMetric *utils.ReplicationMetric
 
 	// can be closed
@@ -119,7 +149,8 @@ func NewOplogSyncer(
 	startPosition interface{},
 	fullSyncFinishPosition int64,
 	mongoUrl string,
-	gids []string) *OplogSyncer {
+	gids []string,
+	orderedNamespaces []string) *OplogSyncer {
 
 	reader, err := sourceReader.CreateReader(conf.Options.IncrSyncMongoFetchMethod, mongoUrl, replset)
 	if err != nil {
@@ -133,13 +164,53 @@ func NewOplogSyncer(
 		fullSyncFinishPosition: utils.Int64ToTimestamp(fullSyncFinishPosition),
 		journal: journal.NewJournal(journal.FileName(
 			fmt.Sprintf("%s.%s", conf.Options.Id, replset))),
-		reader:       reader,
-		qos:          utils.StartQoS(0, 1, &utils.IncrSentinelOptions.TPS), // default is 0 which means do not limit
-		fetcherState: "normal",
+		reader:          reader,
+		qos:             utils.StartQoS(0, 1, &utils.IncrSentinelOptions.TPS), // default is 0 which means do not limit
+		fetcherState:    "normal",
+		workerAckNotify: make(chan struct{}, 1),
+		ckptReady:       make(chan struct{}),
+	}
+
+	// A future starting point may only be clamped once the adjusted anchor is
+	// durable; otherwise a restart reloads the future checkpoint, clamps to a
+	// later newest and skips the gap (#1052 review P1). The hook fences stale
+	// decisions with a conditional write and refuses to write once leadership is
+	// lost; non-OK outcomes converge the reader to the current durable anchor
+	// (#1052 HA P1).
+	if oplogReader, ok := reader.(*sourceReader.OplogReader); ok {
+		oplogReader.SetAnchorPersistHook(func(originalTs, clampedTs int64) (sourceReader.AnchorPersistOutcome, error) {
+			if !quorum.IsMaster() {
+				return sourceReader.PersistNotOwner, nil
+			}
+			res, err := syncer.ckptManager.AdjustAnchor(originalTs, clampedTs)
+			switch res {
+			case ckpt.AnchorAdjusted:
+				return sourceReader.PersistOK, nil
+			case ckpt.AnchorConflict:
+				return sourceReader.PersistConflict, nil
+			case ckpt.AnchorGuardFailed:
+				return sourceReader.PersistGuardFailed, err
+			default: // AnchorReadFailed / AnchorWriteUncertain -> converge via re-read
+				return sourceReader.PersistUncertain, err
+			}
+		})
+		var initTs int64
+		if v, ok := startPosition.(int64); ok {
+			initTs = v
+		}
+		oplogReader.SetInitialProtocolInjections(quorum.IsMaster, func() (int64, bool, error) {
+			c, exist, err := syncer.ckptManager.Get()
+			if err != nil || c == nil {
+				return 0, false, err
+			}
+			return c.Timestamp, exist, nil
+		}, initTs)
 	}
 
 	// concurrent level hasher
 	switch conf.Options.IncrSyncShardKey {
+	case oplog.ShardAutomatic:
+		syncer.hasher = oplog.NewUniqueIndexAwareHasher(orderedNamespaces)
 	case oplog.ShardByNamespace:
 		syncer.hasher = &oplog.TableHasher{}
 	case oplog.ShardByID:
@@ -161,6 +232,11 @@ func NewOplogSyncer(
 		namespaceFilter := filter.NewNamespaceFilter(conf.Options.FilterNamespaceWhite,
 			conf.Options.FilterNamespaceBlack)
 		filterList = append(filterList, namespaceFilter)
+	}
+
+	// field-level whitelist projection (incremental, change_stream only)
+	if len(conf.Options.IncrSyncFieldWhitelistMap) != 0 {
+		filterList = append(filterList, filter.NewFieldFilter(conf.Options.IncrSyncFieldWhitelistMap))
 	}
 
 	// oplog filters. drop the oplog if any of the filter
@@ -203,8 +279,86 @@ func (sync *OplogSyncer) Bind(w *Worker) {
 	sync.batcher.workerGroup = append(sync.batcher.workerGroup, w)
 }
 
+// trackOrderedNamespace moves a namespace to ordered replay when the DDL that
+// is about to run as a barrier introduces a unique index. Only the auto shard
+// key tracks namespaces.
+func (sync *OplogSyncer) trackOrderedNamespace(log *oplog.PartialLog) {
+	hasher, ok := sync.hasher.(*oplog.UniqueIndexAwareHasher)
+	if !ok {
+		return
+	}
+	switched := hasher.MarkOrderedByDDL(log)
+	// the startup warning cannot cover a namespace that only becomes ordered
+	// later, and a worker still hands its batch to incr_sync.executor executors
+	if len(switched) != 0 && conf.Options.IncrSyncExecutor > 1 {
+		l.Logger.Criticalf("shard_key=auto: incr_sync.executor=%d splits the batch of one worker across "+
+			"executors by _id, which breaks the ordered replay these namespaces now need: %v. "+
+			"Set incr_sync.executor=1 to keep the guarantee", conf.Options.IncrSyncExecutor, switched)
+	}
+}
+
+// warnUnswitchableUniqueIndex reports a unique index created by an applyOps
+// inner op. Inner ops are dispatched without a barrier, so the namespace cannot
+// switch to ordered replay at this point.
+func (sync *OplogSyncer) warnUnswitchableUniqueIndex(log *oplog.PartialLog) {
+	hasher, ok := sync.hasher.(*oplog.UniqueIndexAwareHasher)
+	if !ok {
+		return
+	}
+	ns, ok := oplog.EnforcesUniqueIndex(log)
+	if !ok || hasher.IsOrdered(ns) {
+		return
+	}
+	l.Logger.Criticalf("shard_key=auto: unique index on [%s] is applied inside applyOps, which is not a "+
+		"barrier, so the namespace cannot switch to ordered replay. It keeps the _id dispatch and may "+
+		"already be inconsistent: verify the collection, then restart the collector or use "+
+		"shard_key=collection", ns)
+}
+
 func (sync *OplogSyncer) StartDiskApply() {
 	sync.persister.SetFetchStage(utils.FetchStageStoreDiskApply)
+}
+
+// BackfillFullFinishTs propagates the full-sync finish timestamp to the workers
+// and persists it in the checkpoint (#1047). Used by the parallel-mode backfill
+// and by incr restart restoration. It does NOT touch syncer.fullSyncFinishPosition:
+// the batcher's DDL guard keeps its legacy semantics on these paths.
+//
+// Worker writes are plain int64 stores, safe because the backfill strictly
+// precedes StartDiskApply(): during the spool stage inject only buffers to
+// disk and retrieve waits for the atomic fetchStage flip, so no worker reads
+// FullFinishTs until the handoff that also publishes this write (#1050 N1).
+//
+// MaxInt64 (serverless / mongos-only "always in window") is deliberately NOT
+// persisted: it stays an in-memory semantic, and a restart restores 0 with
+// conversion active, matching the pre-#1047 behavior (#1050 review M1).
+//
+// A flush failure here is NOT fatal (#1050 review F1): the workers already
+// hold the window, so this run is unaffected, and losing persistence only
+// means a restart falls back to the pre-#1047 conversion behavior. The staged
+// value rides along on the next successful checkpoint Update, so persistence
+// self-heals. Aborting a completed tens-of-hours full sync over an optional
+// optimization would be a bad trade. The serialize handover in loadCheckpoint
+// keeps fatal semantics, consistent with its Get() failure.
+func (sync *OplogSyncer) BackfillFullFinishTs(ts int64) error {
+	// Wait until Start() has initialized the checkpoint manager and loaded
+	// the durable context; docWg.Wait() alone does not synchronize with it.
+	<-sync.ckptReady
+	for _, w := range sync.batcher.workerGroup {
+		w.SetInitSyncFinishTs(ts)
+	}
+	if ts == math.MaxInt64 {
+		return nil
+	}
+	if sync.ckptManager == nil {
+		return fmt.Errorf("checkpoint manager unavailable after readiness signal")
+	}
+	sync.ckptManager.SetFullFinishTs(ts)
+	if err := sync.ckptManager.FlushStaged(); err != nil {
+		l.Logger.Warnf("%s persist full finish ts failed[%v]; window active in memory, "+
+			"staged value will ride the next checkpoint update", sync, err)
+	}
+	return nil
 }
 
 // Start to polling oplog
@@ -223,16 +377,7 @@ func (sync *OplogSyncer) Start() {
 	// 1. create checkpoint manager
 	// 2. load existing ckpt from remote storage
 	// 3. start checkpoint persist routine
-	sync.newCheckpointManager(sync.Replset, sync.startPosition)
-	if _, ok := sync.startPosition.(int64); !ok {
-		// set resumeToken for aliyun_serverless
-		sync.reader.SetQueryTimestampOnEmpty(sync.startPosition)
-	}
-
-	// load checkpoint and set stage
-	if err := sync.loadCheckpoint(); err != nil {
-		l.Logger.Panicf("%v", err)
-	}
+	sync.initCheckpoint()
 
 	// start deserializer: parse data from pending queue, and then push into logs queue.
 	sync.startDeserializer()
@@ -273,7 +418,7 @@ func (sync *OplogSyncer) startBatcher() {
 					sync, utils.ExtractTimestampForLog(pendingBarrierTs))
 				pendingBarrierTs = 0
 			} else {
-				utils.YieldInMs(DDLCheckpointInterval)
+				time.Sleep(BarrierInterruptedRetryInterval)
 				return
 			}
 		}
@@ -413,42 +558,115 @@ func (sync *OplogSyncer) startBatcher() {
 }
 
 func (sync *OplogSyncer) checkCheckpointUpdate(barrier bool, newestTs int64) bool {
-	if barrier && newestTs > 0 {
-		l.Logger.Infof("%s checkCheckpointUpdate find barrier", sync)
-		var checkpointTs int64
-		for i := 0; ; i++ {
-			if utils.IncrSentinelOptions.Pause || utils.IncrSentinelOptions.Shutdown {
-				l.Logger.Warnf("%s barrier wait interrupted by sentinel (Pause=%v, Shutdown=%v)",
-					sync, utils.IncrSentinelOptions.Pause, utils.IncrSentinelOptions.Shutdown)
-				return false
-			}
+	if !barrier || newestTs <= 0 {
+		return false
+	}
+	l.Logger.Infof("%s checkCheckpointUpdate find barrier", sync)
+	var checkpointTs, lastFlushAck int64
+	var haveCheckpoint, flushFailed bool
+	var nextRead, nextFlush, nextLog time.Time
+	for i := 0; ; i++ {
+		if utils.IncrSentinelOptions.Pause || utils.IncrSentinelOptions.Shutdown {
+			l.Logger.Warnf("%s barrier wait interrupted by sentinel (Pause=%v, Shutdown=%v)",
+				sync, utils.IncrSentinelOptions.Pause, utils.IncrSentinelOptions.Shutdown)
+			return false
+		}
 
+		if !time.Now().Before(nextRead) {
 			checkpoint, err := barrierCkptGetFunc(sync)
 			if err != nil {
 				l.Logger.Errorf("%s[%v] get remote checkpoint failed: %v", sync, i, err)
-				utils.YieldInMs(DDLCheckpointInterval * 3)
-				continue
-			}
-
-			checkpointTs = checkpoint.Timestamp
-
-			if i%CheckCheckpointUpdateTimes == 0 {
-				l.Logger.Infof("%s[%v] compare remote checkpoint[%v] to local newestTs[%v]", sync, i,
-					utils.ExtractTimestampForLog(checkpointTs), utils.ExtractTimestampForLog(newestTs))
-			}
-			if checkpointTs >= newestTs {
-				l.Logger.Infof("%s[%v] barrier checkpoint already updated to newest[%v]",
-					sync, i, utils.ExtractTimestampForLog(newestTs))
-				return true
-			}
-			utils.YieldInMs(DDLCheckpointInterval)
-
-			if barrierCkptFlushFunc(sync) {
-				l.Logger.Infof("[%v] checkCheckpointUpdate checkpoint update succeed", i)
+				haveCheckpoint = false
+				nextRead = time.Now().Add(BarrierCheckpointErrorRetryInterval)
+			} else {
+				checkpointTs, haveCheckpoint = checkpoint.Timestamp, true
+				nextRead = time.Now().Add(BarrierCheckpointRetryInterval)
+				if now := time.Now(); !now.Before(nextLog) {
+					l.Logger.Infof("%s[%v] compare remote checkpoint[%v] to local newestTs[%v]", sync, i,
+						utils.ExtractTimestampForLog(checkpointTs), utils.ExtractTimestampForLog(newestTs))
+					nextLog = now.Add(BarrierCheckpointLogInterval)
+				}
 			}
 		}
+
+		needFlush := false
+		if haveCheckpoint {
+			if checkpointTs >= newestTs {
+				return true
+			}
+			var ack, pin int64
+			var ackErr error
+			if sync.batcher != nil {
+				ack, ackErr = sync.calculateWorkerLowestCheckpoint()
+				if ackErr == nil {
+					pin = sync.batcher.OldestUnackedTxnPinTs(ack)
+				}
+			}
+			// A genuinely pending transaction may keep the checkpoint below
+			// this barrier even though its workers are done. Do not put an
+			// unrelated checkpoint write on that ACK-only completion path.
+			ackSatisfied := ackErr == nil && ack >= newestTs
+			if ackSatisfied && pin > 0 && pin <= newestTs {
+				l.Logger.Infof("%s[%v] barrier satisfied by worker ack[%v] >= newest[%v] while transaction pin[%v] remains",
+					sync, i, utils.ExtractTimestampForLog(ack), utils.ExtractTimestampForLog(newestTs),
+					utils.ExtractTimestampForLog(pin))
+				return true
+			}
+
+			candidate := ack
+			if pin > 0 && candidate >= pin {
+				candidate = pin - 1
+			}
+			needFlush = sync.batcher == nil || (ackErr == nil && candidate > checkpointTs)
+			// Only progress that can complete this barrier may bypass a
+			// successful flush's deadline. Intermediate ACKs and failed writes
+			// keep the independent I/O backoff.
+			freshAck := !flushFailed && candidate >= newestTs && candidate > lastFlushAck
+			if needFlush && (!time.Now().Before(nextFlush) || freshAck) {
+				lastFlushAck = candidate
+				flushed := barrierCkptFlushFunc(sync)
+				flushFailed = !flushed
+				nextFlush = time.Now().Add(BarrierCheckpointRetryInterval)
+				if flushed {
+					if !ackSatisfied {
+						// Without completed worker ACKs the durable checkpoint is
+						// still the only completion evidence; read it back now.
+						nextRead = time.Time{}
+						continue
+					}
+					// Keep healthy-path readback, but a lagging or failed read
+					// cannot undo already completed worker ACKs.
+					if checkpoint, err := barrierCkptGetFunc(sync); err != nil {
+						l.Logger.Warnf("%s barrier worker ACK complete; checkpoint readback failed: %v", sync, err)
+					} else if checkpoint.Timestamp < newestTs {
+						l.Logger.Warnf("%s barrier worker ACK complete; checkpoint readback[%v] is behind newest[%v]",
+							sync, utils.ExtractTimestampForLog(checkpoint.Timestamp), utils.ExtractTimestampForLog(newestTs))
+					}
+				}
+			}
+			if ackSatisfied {
+				// ACKs define ordering. Failed persistence is retried by normal
+				// checkpoint processing once the batcher can make progress again.
+				return true
+			}
+		}
+
+		wait := BarrierCheckpointInterval
+		if remaining := time.Until(nextRead); remaining < wait {
+			wait = remaining
+		}
+		if needFlush {
+			if remaining := time.Until(nextFlush); remaining > 0 && remaining < wait {
+				wait = remaining
+			}
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-sync.workerAckNotify:
+		case <-timer.C:
+		}
+		timer.Stop()
 	}
-	return false
 }
 
 /********************************deserializer begin**********************************/
@@ -482,6 +700,17 @@ func (sync *OplogSyncer) startDeserializer() {
 	}
 }
 
+func newOplogParser(lazy bool) func([]byte) (*oplog.PartialLog, error) {
+	if lazy {
+		return oplog.ParseRaw
+	}
+	return func(input []byte) (*oplog.PartialLog, error) {
+		log := &oplog.PartialLog{}
+		err := bson.Unmarshal(input, &log.ParsedLog)
+		return log, err
+	}
+}
+
 func (sync *OplogSyncer) deserializer(index int) {
 	// parser is used to parse the raw []byte
 	var parser func(input []byte) (*oplog.PartialLog, error)
@@ -492,11 +721,7 @@ func (sync *OplogSyncer) deserializer(index int) {
 		}
 	} else {
 		// parse []byte (oplog format) -> oplog
-		parser = func(input []byte) (*oplog.PartialLog, error) {
-			log := oplog.ParsedLog{}
-			err := bson.Unmarshal(input, &log)
-			return &oplog.PartialLog{ParsedLog: log}, err
-		}
+		parser = newOplogParser(conf.Options.IncrSyncLazyOplogParse)
 	}
 
 	// combiner is used to combine data and send to downstream
@@ -540,6 +765,10 @@ func (sync *OplogSyncer) deserializer(index int) {
 		for _, rawLog := range batchRawLogs {
 			log, err := parser(rawLog)
 			if err != nil {
+				if errors.Is(err, oplog.ErrEmptyChangeStreamUpdate) {
+					l.Logger.Warnf("%s deserializer skip empty change stream update: %v", sync, err)
+					continue
+				}
 				l.Logger.Panicf("%s deserializer parse data failed[%v]", sync, err)
 			}
 			sourceTime := extractSourceTime(rawLog, log)

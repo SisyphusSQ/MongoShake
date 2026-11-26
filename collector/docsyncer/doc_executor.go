@@ -155,9 +155,12 @@ func (exec *DocExecutor) String() string {
 }
 
 func (exec *DocExecutor) start() {
-	if !conf.Options.FullSyncExecutorDebug {
-		defer exec.conn.Close()
-	}
+	// NOTE: do NOT close exec.conn here — all DocExecutors within a
+	// CollectionExecutor share the same connection.  Closing it from one
+	// goroutine would tear down the connection for all others, causing
+	// "use of closed network connection" panics.
+	// CollectionExecutor.Wait() is responsible for closing the shared
+	// connection after all workers have finished.
 
 	for {
 		docs, ok := <-exec.colExecutor.docBatch
@@ -179,7 +182,7 @@ func (exec *DocExecutor) start() {
 }
 
 // use by full sync
-func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
+func (exec *DocExecutor) doSync(docs []*bson.Raw) (syncErr error) {
 	if len(docs) == 0 || conf.Options.FullSyncExecutorDebug {
 		return nil
 	}
@@ -187,28 +190,25 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 	ns := exec.colExecutor.ns
 
 	var models []mongo.WriteModel
+	// modelDocs[i] corresponds to models[i] — 1:1 mapping, needed because
+	// orphan filter may skip documents from docs[], breaking the index
+	// alignment between models and docs.
+	var modelDocs []*bson.Raw
 	for _, doc := range docs {
 
 		if conf.Options.FullSyncExecutorFilterOrphanDocument && exec.syncer.orphanFilter != nil {
 			var docData bson.D
 			if err := bson.Unmarshal(*doc, &docData); err != nil {
-				// previously fell through with an empty docData, which then caused
-				// OrphanFilter.Filter -> oplog.GetKey to return nil and Panicf the
-				// process. Skip the orphan check on unparseable docs instead so a
-				// single bad payload can't crash the syncer; the corrupt bytes
-				// will surface again at BulkWrite as a structured driver error.
 				l.Logger.Errorf("doSync skip orphan check, bson unmarshal failed: %v", err)
-				// intentional fall-through to BulkWrite (no continue):
-				// the malformed payload should reach the driver and surface
-				// there as a typed write error, not be silently dropped.
+				// intentional fall-through to BulkWrite
 			} else if exec.syncer.orphanFilter.Filter(docData, ns.Database+"."+ns.Collection) {
-				// judge whether is orphan document, pass if so
 				l.Logger.Infof("orphan document [%v] filter", doc)
 				continue
 			}
 		}
 
 		models = append(models, mongo.NewInsertOneModel().SetDocument(doc))
+		modelDocs = append(modelDocs, doc)
 	}
 
 	// qps limit if enable
@@ -235,13 +235,29 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 		bulkErr, ok := err.(mongo.BulkWriteException)
 		if !ok {
 			l.Logger.Warnf("insert docs with length[%v] into ns[%v] of dest mongo failed[type:%T err:%v] res[%v]",
-				len(models), ns, err, err, res)
+				len(models), ns.Str(), err, err, res)
+		} else if utils.AllWriteErrorsDupKey(bulkErr) && conf.Options.FullSyncExecutorInsertOnDupUpdate {
+			l.Logger.Debugf("insert docs with length[%v] into ns[%s.%s] of dest mongo handling dup[%v] res[%v]",
+				len(models), ns.Database, ns.Collection, bulkErr, res)
+			// Count the batch only if the update (including any fallback)
+			// below succeeds. Configuration alone does not guarantee that.
+			defer func() {
+				if syncErr == nil {
+					utils.GlobalDupKeyLog.ReportHandled(ns.Database+"."+ns.Collection, len(bulkErr.WriteErrors), err)
+				} else {
+					l.Logger.Warnf("insert docs with length[%v] into ns[%s.%s] of dest mongo failed[%v] res[%v]",
+						len(models), ns.Database, ns.Collection, bulkErr, res)
+				}
+			}()
 		} else {
 			l.Logger.Warnf("insert docs with length[%v] into ns[%v] of dest mongo failed[%v] res[%v]",
-				len(models), ns, bulkErr, res)
+				len(models), ns.Str(), bulkErr, res)
 		}
 
 		var updateModels []mongo.WriteModel
+		// updateDocs[i] and updateFilters[i] correspond to updateModels[i].
+		var updateDocs []*bson.Raw
+		var updateFilters []bson.D
 		for _, wError := range bulkErr.WriteErrors {
 			if utils.DuplicateKey(wError) {
 				if !conf.Options.FullSyncExecutorInsertOnDupUpdate {
@@ -250,7 +266,17 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 						wError, "full_sync.executor.insert_on_dup_update")
 				}
 
-				dupDocument := *docs[wError.Index]
+				// The fallback below replays a duplicate as UpdateOne({_id}, {$set: doc}).
+				// Time-series collections reject every non-multi update, so it cannot
+				// succeed there; say so instead of issuing a write that always fails (#993).
+				if exec.conn.IsTimeSeriesCollection(ns.Database, ns.Collection) {
+					return fmt.Errorf("duplicate key error[%v] on time-series collection %v: "+
+						"full_sync.executor.insert_on_dup_update replays duplicates as an update by _id, "+
+						"which time-series collections do not support. Clean the collection on the target "+
+						"mongodb and restart the full-sync stage", wError, ns)
+				}
+
+				dupDocument := *modelDocs[wError.Index]
 				var updateFilter bson.D
 				updateFilterBool := false
 				var docData bson.D
@@ -267,16 +293,70 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 				}
 				updateModels = append(updateModels, mongo.NewUpdateOneModel().
 					SetFilter(updateFilter).SetUpdate(bson.D{{"$set", dupDocument}}))
+				updateDocs = append(updateDocs, modelDocs[wError.Index])
+				updateFilters = append(updateFilters, updateFilter)
 			} else {
 				return fmt.Errorf("bulk run failed[%v]", wError)
 			}
 		}
 
 		if len(updateModels) != 0 {
-			opts := options.BulkWrite().SetOrdered(false)
-			_, err := exec.conn.Client.Database(ns.Database).Collection(ns.Collection).BulkWrite(nil, updateModels, opts)
-			if err != nil {
-				return fmt.Errorf("bulk run updateForInsert failed[%v]", err)
+			updOpts := options.BulkWrite().SetOrdered(false)
+			_, upErr := exec.conn.Client.Database(ns.Database).Collection(ns.Collection).BulkWrite(nil, updateModels, updOpts)
+			if upErr != nil {
+				// Check if the update failed due to immutable shard key field.
+				// On sharded collections, $set on an immutable shard key field is
+				// rejected. Fall back to delete + insert for only the truly
+				// failed documents (from the update's own error, not the insert's).
+				// This fallback is only enabled when
+				// full_sync.executor.immutable_shard_key_fallback = true because
+				// delete+insert is not atomic — if the target has concurrent writes
+				// on the same _id, data loss can occur between the delete and insert.
+				if conf.Options.FullSyncExecutorImmutableShardKeyFallback && utils.IsImmutableShardKeyError(upErr) {
+					l.Logger.Warnf("updateForInsert hit immutable shard key error on ns[%v], falling back to delete+insert: %v", ns, upErr)
+
+					// Only delete+re-insert the documents whose updates actually
+					// failed (from the update's BulkWriteException), not all
+					// dup-key documents from the insert.
+					var deleteModels []mongo.WriteModel
+					var reInsertModels []mongo.WriteModel
+					if updBulkErr, ok := upErr.(mongo.BulkWriteException); ok {
+						for _, wError := range updBulkErr.WriteErrors {
+							if wError.Index < 0 || wError.Index >= len(updateDocs) {
+								continue
+							}
+							dupDocument := *updateDocs[wError.Index]
+							deleteModels = append(deleteModels, mongo.NewDeleteOneModel().SetFilter(updateFilters[wError.Index]))
+							reInsertModels = append(reInsertModels, mongo.NewInsertOneModel().SetDocument(dupDocument))
+						}
+					} else {
+						// Update error is not a BulkWriteException (e.g. mongos wrapped).
+						// Fall back to delete+insert for all updateModels (conservative).
+						for i := range updateModels {
+							deleteModels = append(deleteModels, mongo.NewDeleteOneModel().SetFilter(updateFilters[i]))
+							reInsertModels = append(reInsertModels, mongo.NewInsertOneModel().SetDocument(*updateDocs[i]))
+						}
+					}
+
+					if len(deleteModels) > 0 {
+						// Phase 1: Delete old documents by _id
+						delOpts := options.BulkWrite().SetOrdered(false)
+						_, delErr := exec.conn.Client.Database(ns.Database).Collection(ns.Collection).BulkWrite(nil, deleteModels, delOpts)
+						if delErr != nil {
+							return fmt.Errorf("delete+insert fallback: delete failed on ns[%v]: %v", ns, delErr)
+						}
+
+						// Phase 2: Re-insert with new shard key values
+						insOpts := options.BulkWrite().SetOrdered(false)
+						_, insErr := exec.conn.Client.Database(ns.Database).Collection(ns.Collection).BulkWrite(nil, reInsertModels, insOpts)
+						if insErr != nil {
+							return fmt.Errorf("delete+insert fallback: re-insert failed on ns[%v]: %v", ns, insErr)
+						}
+						l.Logger.Infof("delete+insert fallback succeeded for %d docs on ns[%v]", len(deleteModels), ns)
+						return nil
+					}
+				}
+				return fmt.Errorf("bulk run updateForInsert failed[%v]", upErr)
 			}
 			l.Logger.Debugf("updateForInsert succeed, updateModels.len:%d updateModules[0]:%v",
 				len(updateModels), updateModels[0])

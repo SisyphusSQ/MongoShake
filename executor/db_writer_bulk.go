@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -24,7 +26,7 @@ type BulkWriter struct {
 	fullFinishTs int64
 }
 
-func (bw *BulkWriter) doInsert(database, collection string, metadata bson.E, oplogs []*OplogRecord, dupUpdate bool) error {
+func (bw *BulkWriter) doInsert(database, collection string, metadata bson.E, oplogs []*OplogRecord, dupUpdate bool) (insertErr error) {
 
 	var models []mongo.WriteModel
 	var modelOplogs []*OplogRecord
@@ -35,15 +37,15 @@ func (bw *BulkWriter) doInsert(database, collection string, metadata bson.E, opl
 			// {EnforceConstraints:false} outside the mongo server
 			l.Logger.Warnf("use 'applyOps' to handle insert op to ns[%v]", log.original.partialLog.Namespace)
 			result := bw.conn.Client.Database("admin").RunCommand(
-				nil, bson.D{{Key: "applyOps", Value: []oplog.ParsedLog{log.original.partialLog.ParsedLog}}})
+				nil, bson.D{{Key: "applyOps", Value: []bson.D{applyOpsDoc(log.original.partialLog)}}})
 			if result.Err() != nil {
 				return result.Err()
 			}
 		} else {
-			models = append(models, mongo.NewInsertOneModel().SetDocument(log.original.partialLog.Object))
+			models = append(models, mongo.NewInsertOneModel().SetDocument(log.original.partialLog.ObjectValue()))
 			modelOplogs = append(modelOplogs, log)
 			l.Logger.Debugf("bulk_writer: insert org_oplog:%v insert_doc:%v",
-				log.original.partialLog, log.original.partialLog.Object)
+				log.original.partialLog, log.original.partialLog.ObjectValue())
 		}
 	}
 
@@ -52,7 +54,7 @@ func (bw *BulkWriter) doInsert(database, collection string, metadata bson.E, opl
 	}
 
 	opts := options.BulkWrite().SetOrdered(false)
-	if conf.Options.IncrSyncBypassDocumentValidation {
+	if bypassDocumentValidationFor(collection) {
 		opts = opts.SetBypassDocumentValidation(true)
 	}
 	res, err := bw.conn.Client.Database(database).Collection(collection).BulkWrite(nil, models, opts)
@@ -60,24 +62,82 @@ func (bw *BulkWriter) doInsert(database, collection string, metadata bson.E, opl
 	if err != nil {
 		var bulkErr mongo.BulkWriteException
 		ok := errors.As(err, &bulkErr)
+		// Aggregate pure duplicates after the selected conversion/ignore/skip
+		// path succeeds. Skip still validates every error code and index below;
+		// rejected batches retain their full warning detail.
+		handledByConfig := dupUpdate ||
+			overlapWindowSkipEnabled(bw.fullFinishTs, parseLastTimestamp(oplogs)) ||
+			conf.Options.IncrSyncExecutorDupKeyStrategy == "" ||
+			conf.Options.IncrSyncExecutorDupKeyStrategy == utils.VarIncrSyncExecutorDupKeyStrategyIgnore ||
+			conf.Options.IncrSyncExecutorDupKeyStrategy == utils.VarIncrSyncExecutorDupKeyStrategySkip
 		if !ok {
 			l.Logger.Warnf("insert docs with length[%v] into ns[%v] of dest mongo failed[type:%T err:%v] res[%v]",
 				len(models), database+"."+collection, err, err, res)
+		} else if handledByConfig && utils.AllWriteErrorsDupKey(bulkErr) {
+			l.Logger.Debugf("insert docs with length[%v] into ns[%s.%s] of dest mongo handling dup[%v] res[%v]",
+				len(models), database, collection, bulkErr, res)
+			// The conversion can still fail; record handled batches only
+			// after the selected duplicate-key strategy returns success.
+			defer func() {
+				if insertErr == nil {
+					utils.GlobalDupKeyLog.ReportHandled(database+"."+collection, len(bulkErr.WriteErrors), err)
+				} else {
+					l.Logger.Warnf("insert docs with length[%v] into ns[%s.%s] of dest mongo failed[%v] res[%v]",
+						len(models), database, collection, bulkErr, res)
+				}
+			}()
 		} else {
 			l.Logger.Warnf("insert docs with length[%v] into ns[%v] of dest mongo failed[%v] res[%v]",
 				len(models), database+"."+collection, bulkErr, res)
 		}
 
 		if utils.DuplicateKey(err) {
+			// DuplicateKey only reports that SOME write error is a duplicate key,
+			// so a batch mixing E11000 with e.g. a document validation failure
+			// would be converted or ignored as a whole. The rejected documents
+			// would then be acknowledged without ever being written, and the
+			// checkpoint would move past them. Only handle batches whose write
+			// errors are all duplicates.
+			if ok && !utils.AllWriteErrorsDupKey(bulkErr) {
+				l.Logger.Warnf("insert docs with length[%v] into ns[%s.%s] of dest mongo mixed "+
+					"duplicate and non-duplicate errors, refusing to handle the batch: %v",
+					len(models), database, collection, bulkErr)
+				return err
+			}
+			// Inside the full/incr overlap window an _id duplicate is expected:
+			// the full scan already carried the document at a version >= this
+			// insert oplog, so acknowledging it converges (#1047). The unordered
+			// bulk already applied every non-conflicting document; no conversion
+			// or per-document retry is needed. Secondary-index duplicates are
+			// real conflicts and stay on the configured strategy path below.
+			if overlapWindowSkipEnabled(bw.fullFinishTs, parseLastTimestamp(oplogs)) && allDupKeyErrorsOnIDIndex(bulkErr) {
+				// audit only the actual duplicates: the unordered bulk already
+				// inserted the rest, dumping them would pollute the conflict
+				// collection and amplify writes (#1050 review B3)
+				RecordDuplicatedOplog(bw.conn, collection, failedInsertSubset(modelOplogs, bulkErr))
+				return nil
+			}
 			// update on duplicated key occur
 			if dupUpdate {
-				RecordDuplicatedOplog(bw.conn, collection, oplogs)
-				l.Logger.Infof("Duplicated document found. reinsert or update to [%s] [%s]", database, collection)
-				return bw.doUpdateOnInsert(database, collection, metadata, oplogs, conf.Options.IncrSyncExecutorUpsert)
+				// audit only the failed subset here too: with the shortcut
+				// guarded off (default DDL config) this is the main path, and
+				// dumping successfully inserted documents would pollute the
+				// conflict collection (#1050 review M3)
+				RecordDuplicatedOplog(bw.conn, collection, failedInsertSubset(modelOplogs, bulkErr))
+				l.Logger.Debugf("Duplicated document found. reinsert or update to [%s] [%s]", database, collection)
+				// Only the failed documents need conversion; the unordered bulk
+				// already inserted the rest, and rewriting them would double-write
+				// every document in the batch (#1047).
+				return bw.doUpdateOnInsert(database, collection, metadata, failedInsertSubset(modelOplogs, bulkErr),
+					conf.Options.IncrSyncExecutorUpsert)
 			}
 			switch conf.Options.IncrSyncExecutorDupKeyStrategy {
 			case "", utils.VarIncrSyncExecutorDupKeyStrategyIgnore:
-				return handleDupKeyOnInsert(bw.conn, database, collection, oplogs, err, "bulk_writer::doInsert")
+				// The bulk error is already retained at Debug and successful
+				// pure duplicates are summarized by the defer above. Keep the
+				// shared single/command-writer helper's per-op logging separate.
+				RecordDuplicatedOplog(bw.conn, collection, oplogs)
+				return nil
 			case utils.VarIncrSyncExecutorDupKeyStrategySkip:
 				return bw.handleBulkInsertDupKeySkip(database, collection, modelOplogs, err)
 			default:
@@ -87,6 +147,94 @@ func (bw *BulkWriter) doInsert(database, collection string, metadata bson.E, opl
 		return err
 	}
 	return nil
+}
+
+// overlapWindowSkipEnabled reports whether the benign-dup shortcut may apply
+// for a batch whose last oplog timestamp is lastTs (#1047). Filtering out
+// delete ops breaks the convergence premise: with filter.op_types=d the
+// sequence insert(v1)/delete/insert(v2) of one _id collapses into a single
+// insert batch, and skipping the duplicate second insert would strand the
+// target at v1 while the source holds v2.
+func overlapWindowSkipEnabled(fullFinishTs, lastTs int64) bool {
+	if fullFinishTs <= 0 || lastTs > fullFinishTs {
+		return false
+	}
+	// MaxInt64 means "no finite overlap bound" (serverless / mongos-only).
+	// IgnoreError keeps its always-in-window u/ui semantics there, but the
+	// insert shortcut is new behavior and its convergence premise (empty or
+	// dedicated target) is not guaranteed for a plain mongos-only config, so
+	// it stays off and inserts keep the pre-#1047 conversion path (#1050 F2).
+	if fullFinishTs == math.MaxInt64 {
+		return false
+	}
+	for _, op := range conf.Options.FilterOpTypes {
+		if op == "d" {
+			return false
+		}
+	}
+	// DDL filtering breaks the same premise isomorphically: with
+	// filter.ddl_enable=false (the factory default; sharded+oplog sources
+	// cannot enable it — sanitize rejects the combination with an error) a
+	// drop+recreate inside the window is dropped, the target keeps the OLD
+	// incarnation, and the new incarnation's insert hits an _id dup that must
+	// NOT be acknowledged as "scan carried a newer version" (#1050 review F4).
+	// With DDL replayed the drop clears the target and the insert never dups,
+	// so the shortcut is safe there.
+	if !conf.Options.FilterDDLEnable {
+		return false
+	}
+	// dup_key_strategy=error is an explicit user intent to stop on ANY
+	// duplicate; the shortcut must not silently override it (#1050 review M1,
+	// author-decided option 2). Such users keep the pre-#1047 behavior.
+	if conf.Options.IncrSyncExecutorDupKeyStrategy == utils.VarIncrSyncExecutorDupKeyStrategyError {
+		return false
+	}
+	return true
+}
+
+// allDupKeyErrorsOnIDIndex reports whether every write error is an E11000 on
+// the _id index. Only those are the benign overlap-window duplicates (#1047);
+// a secondary unique-index conflict (different _id) must keep the configured
+// strategy. E11000 may name a secondary index even when _id also conflicts,
+// so such batches conservatively stay on the existing path.
+func allDupKeyErrorsOnIDIndex(bulkErr mongo.BulkWriteException) bool {
+	if len(bulkErr.WriteErrors) == 0 {
+		return false
+	}
+	for _, writeErr := range bulkErr.WriteErrors {
+		if !writeErr.HasErrorCode(11000) {
+			return false
+		}
+		if parseDupKeyIndexName(fmt.Errorf("%s", writeErr.Message)) != "_id_" {
+			return false
+		}
+	}
+	return true
+}
+
+// failedInsertSubset extracts the documents rejected by the unordered bulk,
+// ordered by their model index so the relative application order is preserved
+// even when the server reports write errors out of order (e.g. via mongos).
+// Indices map onto the models actually sent (modelOplogs), not the raw oplogs:
+// system.views inserts are handled via applyOps and never enter the bulk. An
+// out-of-range index falls back to the whole batch, the pre-#1047 behavior.
+func failedInsertSubset(modelOplogs []*OplogRecord, bulkErr mongo.BulkWriteException) []*OplogRecord {
+	indexes := make([]int, 0, len(bulkErr.WriteErrors))
+	for _, writeErr := range bulkErr.WriteErrors {
+		if writeErr.Index < 0 || writeErr.Index >= len(modelOplogs) {
+			return modelOplogs
+		}
+		indexes = append(indexes, writeErr.Index)
+	}
+	if len(indexes) == 0 {
+		return modelOplogs
+	}
+	sort.Ints(indexes)
+	subset := make([]*OplogRecord, 0, len(indexes))
+	for _, idx := range indexes {
+		subset = append(subset, modelOplogs[idx])
+	}
+	return subset
 }
 
 func (bw *BulkWriter) handleBulkInsertDupKeySkip(database, collection string, oplogs []*OplogRecord, err error) error {
@@ -112,7 +260,7 @@ func (bw *BulkWriter) handleBulkInsertDupKeySkip(database, collection string, op
 	for _, writeErr := range bulkErr.WriteErrors {
 		RecordDuplicatedOplog(bw.conn, collection, []*OplogRecord{oplogs[writeErr.Index]})
 	}
-	l.Logger.Warnf("bulk_writer::doInsert duplicated oplogs skipped, ns[%s.%s], err[%v]",
+	l.Logger.Debugf("bulk_writer::doInsert duplicated oplogs skipped, ns[%s.%s], err[%v]",
 		database, collection, err)
 	return nil
 }
@@ -122,7 +270,7 @@ func (bw *BulkWriter) doUpdateOnInsert(database, collection string, metadata bso
 	var modelOplogs []*OplogRecord
 
 	for _, log := range oplogs {
-		newObject := log.original.partialLog.Object
+		newObject := log.original.partialLog.ObjectValue()
 		if upsert && len(log.original.partialLog.DocumentKey) > 0 {
 
 			models = append(models, mongo.NewUpdateOneModel().
@@ -134,7 +282,7 @@ func (bw *BulkWriter) doUpdateOnInsert(database, collection string, metadata bso
 			//	l.Logger.Warnf("doUpdateOnInsert runs upsert but lack documentKey: %v", log.original.partialLog)
 			// }
 			// insert must have _id
-			if id := oplog.GetKey(log.original.partialLog.Object, ""); id != nil {
+			if id := log.original.partialLog.ObjectKey(""); id != nil {
 
 				model := mongo.NewUpdateOneModel().
 					SetFilter(bson.D{{"_id", id}}).
@@ -157,7 +305,7 @@ func (bw *BulkWriter) doUpdateOnInsert(database, collection string, metadata bso
 	}
 
 	opts := options.BulkWrite()
-	if conf.Options.IncrSyncBypassDocumentValidation {
+	if bypassDocumentValidationFor(collection) {
 		opts = opts.SetBypassDocumentValidation(true)
 	}
 	res, err := bw.conn.Client.Database(database).Collection(collection).BulkWrite(nil, models, opts)
@@ -184,6 +332,72 @@ func (bw *BulkWriter) doUpdateOnInsert(database, collection string, metadata bso
 			}
 			l.Logger.Warnf("ignore error[%v] when run operation[%v], initialSync[%v], oplog[%v]",
 				err, "u", parseLastTimestamp(oplogs) <= bw.fullFinishTs, oplogRecord)
+			return nil
+		}
+
+		// immutable shard key fallback: if update fails because the
+		// existing document has a different shard key value, delete
+		// the old document and re-insert with the new value.
+		// This fallback is only enabled when
+		// incr_sync.executor.immutable_shard_key_fallback = true because
+		// delete+insert is not atomic — if the target has concurrent writes
+		// on the same _id, data loss can occur between the delete and insert.
+		if conf.Options.IncrSyncExecutorImmutableShardKeyFallback && utils.IsImmutableShardKeyError(err) {
+			l.Logger.Warnf("doUpdateOnInsert hit immutable shard key error on ns[%v.%v], falling back to delete+insert: %v", database, collection, err)
+
+			// Maps _id values already seen in this fallback to avoid
+			// re-insert collision when multiple oplogs share the same _id.
+			seenIDs := make(map[interface{}]bool)
+			var deleteModels []mongo.WriteModel
+			var reInsertModels []mongo.WriteModel
+			if bulkErr, ok := err.(mongo.BulkWriteException); ok {
+				for _, wError := range bulkErr.WriteErrors {
+					if wError.Index < 0 || wError.Index >= len(modelOplogs) {
+						continue
+					}
+					doc := modelOplogs[wError.Index].original.partialLog.ObjectValue()
+					id := modelOplogs[wError.Index].original.partialLog.ObjectKey("")
+					if id != nil && !seenIDs[id] {
+						seenIDs[id] = true
+						deleteModels = append(deleteModels, mongo.NewDeleteOneModel().SetFilter(bson.D{{"_id", id}}))
+						reInsertModels = append(reInsertModels, mongo.NewInsertOneModel().SetDocument(doc))
+					}
+				}
+			} else {
+				// bulk error type not available (e.g. wrapped by mongos),
+				// fall back to single-document delete+insert for safety.
+				// Dedup by _id to avoid re-insert collision.
+				for _, log := range modelOplogs {
+					doc := log.original.partialLog.ObjectValue()
+					id := log.original.partialLog.ObjectKey("")
+					if id != nil && !seenIDs[id] {
+						seenIDs[id] = true
+						deleteModels = append(deleteModels, mongo.NewDeleteOneModel().SetFilter(bson.D{{"_id", id}}))
+						reInsertModels = append(reInsertModels, mongo.NewInsertOneModel().SetDocument(doc))
+					}
+				}
+			}
+			if len(deleteModels) > 0 {
+				delOpts := options.BulkWrite().SetOrdered(false)
+				_, delErr := bw.conn.Client.Database(database).Collection(collection).BulkWrite(nil, deleteModels, delOpts)
+				if delErr != nil {
+					return fmt.Errorf("delete+insert fallback: delete failed on ns[%v.%v]: %w", database, collection, delErr)
+				}
+				insOpts := options.BulkWrite().SetOrdered(false)
+				_, insErr := bw.conn.Client.Database(database).Collection(collection).BulkWrite(nil, reInsertModels, insOpts)
+				if insErr != nil {
+					return fmt.Errorf("delete+insert fallback: re-insert failed on ns[%v.%v]: %w", database, collection, insErr)
+				}
+				l.Logger.Infof("delete+insert fallback succeeded for %d docs on ns[%v.%v]", len(deleteModels), database, collection)
+			}
+
+			// The bulk is ordered (no SetOrdered(false)), so the server
+			// stopped at the first error. ops after index were never
+			// executed — re-run them via single writer.
+			if index >= 0 && index+1 < len(modelOplogs) {
+				sw := NewDbWriter(bw.conn, bson.E{}, false, bw.fullFinishTs)
+				return sw.doUpdateOnInsert(database, collection, metadata, modelOplogs[index+1:], upsert)
+			}
 			return nil
 		}
 
@@ -319,31 +533,20 @@ func (bw *BulkWriter) doUpdate(database, collection string, metadata bson.E, opl
 
 		updateCmd := "update"
 		l.Logger.Debugf("bulk_writer doUpdate: org_doc:%v", log.original.partialLog)
-		if oplog.FindFiledPrefix(log.original.partialLog.Object, "$") {
+		if log.original.partialLog.ObjectHasPrefix("$") {
 			var oplogErr error
-
-			oplogVer, ok := oplog.GetKey(log.original.partialLog.Object, versionMark).(int32)
-			l.Logger.Debugf("bulk_writer doUpdate: have $, org_object:%v "+
-				"object_ver:%v\n", log.original.partialLog.Object, oplogVer)
-
-			if ok && oplogVer == 2 {
-				if newObject, oplogErr = oplog.DiffUpdateOplogToNormal(log.original.partialLog.Object); oplogErr != nil {
-					// Time-series bucket update with column-store binary diff (e.g., sdata.b)
-					// cannot be converted to normal $set/$unset. Fall back to replay with 'applyOps' command.
-					if strings.HasPrefix(collection, utils.VarSystemBucketsPrefix) {
-						l.Logger.Infof("bulk_writer fall back to applyOps for time-series bucket update on %s.%s: %v",
-							database, collection, oplogErr)
-						if applyErr := replayUpdateViaApplyOps(bw.conn.Client, log.original.partialLog); applyErr != nil {
-							return applyErr
-						}
-						continue
+			if newObject, oplogErr = log.original.partialLog.UpdateValue(); oplogErr != nil {
+				// Column-store diffs in time-series buckets need the original applyOps.
+				if strings.HasPrefix(collection, utils.VarSystemBucketsPrefix) {
+					// oplogErr embeds the raw column-store binary diff, so it is left out of the log.
+					l.Logger.Infof("bulk_writer fall back to applyOps for time-series bucket update on %s.%s", database, collection)
+					if applyErr := replayUpdateViaApplyOps(bw.conn.Client, log.original.partialLog); applyErr != nil {
+						return applyErr
 					}
-					l.Logger.Errorf("doUpdate run failed err[%v] org_doc[%v]", oplogErr, log.original.partialLog)
-					return oplogErr
+					continue
 				}
-			} else {
-				log.original.partialLog.Object = oplog.RemoveFiled(log.original.partialLog.Object, versionMark)
-				newObject = log.original.partialLog.Object
+				l.Logger.Errorf("doUpdate run failed err[%v] org_doc[%v]", oplogErr, log.original.partialLog)
+				return oplogErr
 			}
 
 			if upsert && len(log.original.partialLog.DocumentKey) > 0 {
@@ -356,7 +559,7 @@ func (bw *BulkWriter) doUpdate(database, collection string, metadata bson.E, opl
 				// }
 
 				model := mongo.NewUpdateOneModel().
-					SetFilter(log.original.partialLog.Query).
+					SetFilter(log.original.partialLog.QueryValue()).
 					SetUpdate(newObject)
 				if upsert {
 					model.SetUpsert(true)
@@ -364,17 +567,17 @@ func (bw *BulkWriter) doUpdate(database, collection string, metadata bson.E, opl
 				models = append(models, model)
 			}
 		} else {
-			newObject = log.original.partialLog.Object
+			newObject = log.original.partialLog.ObjectValue()
 
 			if upsert && len(log.original.partialLog.DocumentKey) > 0 {
 				models = append(models, mongo.NewReplaceOneModel().
 					SetFilter(log.original.partialLog.DocumentKey).
-					SetReplacement(log.original.partialLog.Object).
+					SetReplacement(log.original.partialLog.ObjectValue()).
 					SetUpsert(true))
 			} else {
 				model := mongo.NewReplaceOneModel().
-					SetFilter(log.original.partialLog.Query).
-					SetReplacement(log.original.partialLog.Object)
+					SetFilter(log.original.partialLog.QueryValue()).
+					SetReplacement(log.original.partialLog.ObjectValue())
 				if upsert || log.original.partialLog.Upsert {
 					model.SetUpsert(true)
 				}
@@ -387,9 +590,13 @@ func (bw *BulkWriter) doUpdate(database, collection string, metadata bson.E, opl
 	}
 
 	l.Logger.Debugf("bulk_writer: update models len %v", len(models))
+	if len(models) == 0 {
+		// Every record may already have been replayed via the applyOps fallback.
+		return nil
+	}
 
 	opts := options.BulkWrite()
-	if conf.Options.IncrSyncBypassDocumentValidation {
+	if bypassDocumentValidationFor(collection) {
 		opts = opts.SetBypassDocumentValidation(true)
 	}
 	res, err := bw.conn.Client.Database(database).Collection(collection).BulkWrite(
@@ -439,7 +646,7 @@ func (bw *BulkWriter) doUpdate(database, collection string, metadata bson.E, opl
 func (bw *BulkWriter) doDelete(database, collection string, metadata bson.E, oplogs []*OplogRecord) error {
 	var models []mongo.WriteModel
 	for _, log := range oplogs {
-		models = append(models, mongo.NewDeleteOneModel().SetFilter(log.original.partialLog.Object))
+		models = append(models, mongo.NewDeleteOneModel().SetFilter(log.original.partialLog.ObjectValue()))
 
 		l.Logger.Debugf("bulk_writer: delete %v", log.original.partialLog)
 	}
@@ -463,7 +670,7 @@ func (bw *BulkWriter) doDelete(database, collection string, metadata bson.E, opl
 func (bw *BulkWriter) doCommand(database string, metadata bson.E, oplogs []*OplogRecord) error {
 	var err error
 	for _, log := range oplogs {
-		newObject := log.original.partialLog.Object
+		newObject := log.original.partialLog.ObjectValue()
 		operation, found := oplog.ExtraCommandName(newObject)
 		if conf.Options.FilterDDLEnable || (found && oplog.IsSyncDataCommand(operation)) {
 			// execute one by one with sequence order

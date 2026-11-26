@@ -72,42 +72,12 @@ func fillupOperationValues(log *PartialLogWithCallback) {
 		log.partialLog.UniqueIndexesUpdates = bson.M{}
 	}
 
-	o := log.partialLog.Object
 	for k := range log.partialLog.UniqueIndexes {
 		// multi key index like "name|phone", seperate by MultiColumnIndexSplitter
 		// every index value should be fetched respectively from oplog.o
 		for _, singleIndex := range strings.Split(k, MultiColumnIndexSplitter) {
 			// single index may be "aaa" or "aaa.bbb.ccc"
-			parent, _ := oplog.ConvertBsonD2M(o)
-			// all types of $inc, $mul, $rename, $unset, $set change to $set,$unset in oplog
-			// $set looks like o:{$set:{a:{b:1}}} or o:{$set:{"a.b":1}}
-			if m, exist := parent["$set"]; exist {
-				if child, ok := m.(bson.M); ok {
-					// skip $set operator
-					parent = child
-				}
-			}
-
-			var value interface{}
-			// check if there already has "a.b.c" in $set
-			if v, exist := parent[singleIndex]; exist {
-				value = v
-			} else {
-				cascades := strings.Split(singleIndex, ".")
-				descend := len(cascades) - 1
-				// going down
-				inPosition := true
-				for i := 0; i != descend; i++ {
-					if down, ok := parent[cascades[i]].(bson.M); ok {
-						parent = down
-					} else {
-						inPosition = false
-					}
-				}
-				if inPosition {
-					value = parent[cascades[len(cascades)-1]]
-				}
-			}
+			value := log.partialLog.IndexValue(singleIndex)
 
 			var fill interface{}
 			switch log.partialLog.Operation {
@@ -196,7 +166,11 @@ func calculateSignature(object interface{}) (sign float64) {
 			sign = 31.0*sign + float64(c)
 		}
 	case primitive.Timestamp: // numbers
-		sign = float64(int64(o.T<<32) + int64(o.I))
+		// o.T is a uint32, so o.T<<32 is always zero; the shift has to happen
+		// after widening. Above 2^53 the float64 conversion rounds the
+		// increment away, which is why the test only asserts exactness for
+		// small T -- see TestCalculateSignatureUsesTimestampSeconds.
+		sign = float64(int64(o.T)<<32 + int64(o.I))
 	case int, uint, int8, uint8, int16, uint16, int32, uint32, int64, uint64, float32, float64:
 		if v, ok := object.(float64); ok {
 			sign = float64(v)
@@ -222,14 +196,14 @@ func calculateSignature(object interface{}) (sign float64) {
 }
 
 func ExactlyMatch(first, second interface{}) bool {
+	// both of them are null is accept. This has to come first: reflect.TypeOf(nil)
+	// is a nil reflect.Type, so calling Kind() on it below would panic.
+	if first == nil && second == nil {
+		return true
+	}
 	if (first != nil && second == nil) || (first == nil && second != nil) ||
 		reflect.TypeOf(first).Kind() != reflect.TypeOf(second).Kind() {
 		return false
-	}
-
-	// both of them are null is accept
-	if first == nil && second == nil {
-		return true
 	}
 
 	switch o := first.(type) {
@@ -286,12 +260,12 @@ func ExactlyMatch(first, second interface{}) bool {
 }
 
 func intersectionInOrder(one bson.M, other bson.M) bool {
-	// TODO: BSON's object or array is already sorted ?! we can get the intersection more easier
-	// BUT for now. we don't make such assumption. so make it simple, we iterate every field
-	// in Map. and compare to another
+	// Keep scanning: returning on the first shared key would miss a later column
+	// whose values do match, and Go's randomised map order made that
+	// non-deterministic. Detecting more conflicts is the safe direction here.
 	for k1, v1 := range one {
-		if v2, exist := other[k1]; exist {
-			return ExactlyMatch(v1, v2)
+		if v2, exist := other[k1]; exist && ExactlyMatch(v1, v2) {
+			return true
 		}
 	}
 	return false

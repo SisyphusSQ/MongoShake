@@ -29,7 +29,6 @@ type Configuration struct {
 	MongoCsUrl                             string   `config:"mongo_cs_url"`
 	MongoSUrl                              string   `config:"mongo_s_url"`
 	MongoSslRootCaFile                     string   `config:"mongo_ssl_root_ca_file"` // add v2.6.2
-	MongoSslClientCaFile                   string   `config:"mongo_ssl_root_ca_file"`
 	MongoConnectMode                       string   `config:"mongo_connect_mode"`
 	Tunnel                                 string   `config:"tunnel"`
 	TunnelAddress                          []string `config:"tunnel.address"`
@@ -56,46 +55,54 @@ type Configuration struct {
 	CheckpointStartPosition                int64    `config:"checkpoint.start_position" type:"date"`
 	TransformNamespace                     []string `config:"transform.namespace"`
 	SpecialSourceDBFlag                    string   `config:"special.source.db.flag" type:"string"` // add v2.4.20
+	SpecialTargetDBFlag                    string   `config:"special.target.db.flag" type:"string"` // add v2.8.10
 	SkipNSShareKeyVerify                   []string `config:"skip.nsshardkey.verify"`               // add v2.8.2
 
 	// 2. full sync
-	FullSyncReaderCollectionParallel     int    `config:"full_sync.reader.collection_parallel"`
-	FullSyncReaderWriteDocumentParallel  int    `config:"full_sync.reader.write_document_parallel"`
-	FullSyncReaderDocumentBatchSize      int    `config:"full_sync.reader.document_batch_size"`
-	FullSyncReaderFetchBatchSize         int    `config:"full_sync.reader.fetch_batch_size"`
-	FullSyncReaderParallelThread         int    `config:"full_sync.reader.parallel_thread"`      // add v2.6.4
-	FullSyncReaderParallelIndex          string `config:"full_sync.reader.parallel_index"`       // add v2.6.4
-	FullSyncReaderSplitMaxChunkSize      int    `config:"full_sync.reader.split_max_chunk_size"` // add v2.8.7
-	FullSyncCollectionDrop               bool   `config:"full_sync.collection_exist_drop"`
-	FullSyncCreateIndex                  string `config:"full_sync.create_index"`
-	FullSyncReaderOplogStoreDisk         bool   `config:"full_sync.reader.oplog_store_disk"`
-	FullSyncReaderOplogStoreDiskMaxSize  int64  `config:"full_sync.reader.oplog_store_disk_max_size"`
-	FullSyncExecutorInsertOnDupUpdate    bool   `config:"full_sync.executor.insert_on_dup_update"`
-	FullSyncExecutorFilterOrphanDocument bool   `config:"full_sync.executor.filter.orphan_document"`
-	FullSyncExecutorMajorityEnable       bool   `config:"full_sync.executor.majority_enable"`
-	FullSyncDoNotShardDest               bool   `config:"full_sync.do_not_shard_destination"` // add v2.8.6
+	FullSyncTPS                               int64    `config:"full_sync.tps"` // add v2.8.10
+	FullSyncReaderCollectionParallel          int      `config:"full_sync.reader.collection_parallel"`
+	FullSyncReaderWriteDocumentParallel       int      `config:"full_sync.reader.write_document_parallel"`
+	FullSyncReaderDocumentBatchSize           int      `config:"full_sync.reader.document_batch_size"`
+	FullSyncReaderFetchBatchSize              int      `config:"full_sync.reader.fetch_batch_size"`
+	FullSyncReaderParallelThread              int      `config:"full_sync.reader.parallel_thread"`      // add v2.6.4
+	FullSyncReaderParallelIndex               string   `config:"full_sync.reader.parallel_index"`       // add v2.6.4
+	FullSyncReaderSplitMaxChunkSize           int      `config:"full_sync.reader.split_max_chunk_size"` // add v2.8.7
+	FullSyncCollectionDrop                    bool     `config:"full_sync.collection_exist_drop"`
+	FullSyncCreateIndex                       string   `config:"full_sync.create_index"`
+	FullSyncReaderOplogStoreDisk              bool     `config:"full_sync.reader.oplog_store_disk"`
+	FullSyncReaderOplogStoreDiskMaxSize       int64    `config:"full_sync.reader.oplog_store_disk_max_size"`
+	FullSyncExecutorInsertOnDupUpdate         bool     `config:"full_sync.executor.insert_on_dup_update"`
+	FullSyncExecutorFilterOrphanDocument      bool     `config:"full_sync.executor.filter.orphan_document"`
+	FullSyncExecutorMajorityEnable            bool     `config:"full_sync.executor.majority_enable"`
+	FullSyncDoNotShardDest                    bool     `config:"full_sync.do_not_shard_destination"`              // add v2.8.6
+	FullSyncExecutorImmutableShardKeyFallback bool     `config:"full_sync.executor.immutable_shard_key_fallback"` // add v2.8.9
+	FullSyncFieldWhitelist                    []string `config:"full_sync.field.whitelist"`                       // add field-level sync
 
 	// 3. incr sync
-	IncrSyncMongoFetchMethod                string   `config:"incr_sync.mongo_fetch_method"`
-	IncrSyncChangeStreamWatchFullDocument   bool     `config:"incr_sync.change_stream.watch_full_document"`
-	IncrSyncReaderFetchBatchSize            int      `config:"incr_sync.reader.fetch_batch_size"`
-	IncrSyncOplogGIDS                       []string `config:"incr_sync.oplog.gids"`
-	IncrSyncShardKey                        string   `config:"incr_sync.shard_key"`
-	IncrSyncShardByObjectIdWhiteList        []string `config:"incr_sync.shard_by_object_id_whitelist"`
-	IncrSyncWorker                          int      `config:"incr_sync.worker"`
-	IncrSyncTunnelWriteThread               int      `config:"incr_sync.tunnel.write_thread"` // add v2.4.21
-	IncrSyncTargetDelay                     int64    `config:"incr_sync.target_delay"`
-	IncrSyncWorkerBatchQueueSize            uint64   `config:"incr_sync.worker.batch_queue_size"`
-	IncrSyncAdaptiveBatchingMaxSize         int      `config:"incr_sync.adaptive.batching_max_size"`
-	IncrSyncFetcherBufferCapacity           int      `config:"incr_sync.fetcher.buffer_capacity"`
-	IncrSyncFetcherBufferSizeThresholdInKB  int      `config:"incr_sync.fetcher.buffer_size_threshold_in_kb"` // add v2.8.6
-	IncrSyncExecutorUpsert                  bool     `config:"incr_sync.executor.upsert"`
-	IncrSyncExecutorInsertOnDupUpdate       bool     `config:"incr_sync.executor.insert_on_dup_update"`
-	IncrSyncExecutorDupKeyStrategy          string   `config:"incr_sync.executor.dup_key_strategy"`   // add v2.8.9
-	IncrSyncExecutorDupKeySkipRules         []string `config:"incr_sync.executor.dup_key_skip_rules"` // add v2.8.9
-	IncrSyncConflictWriteTo                 string   `config:"incr_sync.conflict_write_to"`           // remove "sdk" option since v2.4.21
-	IncrSyncExecutorMajorityEnable          bool     `config:"incr_sync.executor.majority_enable"`
-	IncrSyncBypassDocumentValidation        bool     `config:"incr_sync.executor.bypass_document_validation"` // add v2.8.7
+	IncrSyncLazyOplogParse                    bool     `config:"incr_sync.lazy_oplog_parse"` // add v2.8.9
+	IncrSyncMongoFetchMethod                  string   `config:"incr_sync.mongo_fetch_method"`
+	IncrSyncChangeStreamWatchFullDocument     bool     `config:"incr_sync.change_stream.watch_full_document"`
+	IncrSyncReaderFetchBatchSize              int      `config:"incr_sync.reader.fetch_batch_size"`
+	IncrSyncOplogGIDS                         []string `config:"incr_sync.oplog.gids"`
+	IncrSyncShardKey                          string   `config:"incr_sync.shard_key"`
+	IncrSyncShardByObjectIdWhiteList          []string `config:"incr_sync.shard_by_object_id_whitelist"`
+	IncrSyncWorker                            int      `config:"incr_sync.worker"`
+	IncrSyncTunnelWriteThread                 int      `config:"incr_sync.tunnel.write_thread"` // add v2.4.21
+	IncrSyncTargetDelay                       int64    `config:"incr_sync.target_delay"`
+	IncrSyncWorkerBatchQueueSize              uint64   `config:"incr_sync.worker.batch_queue_size"`
+	IncrSyncAdaptiveBatchingMaxSize           int      `config:"incr_sync.adaptive.batching_max_size"`
+	IncrSyncFetcherBufferCapacity             int      `config:"incr_sync.fetcher.buffer_capacity"`
+	IncrSyncFetcherBufferSizeThresholdInKB    int      `config:"incr_sync.fetcher.buffer_size_threshold_in_kb"` // add v2.8.6
+	IncrSyncBarrierOrderingEnable             bool     `config:"incr_sync.barrier.ordering_enable"`             // add v2.8.9
+	IncrSyncExecutorUpsert                    bool     `config:"incr_sync.executor.upsert"`
+	IncrSyncExecutorInsertOnDupUpdate         bool     `config:"incr_sync.executor.insert_on_dup_update"`
+	IncrSyncExecutorDupKeyStrategy            string   `config:"incr_sync.executor.dup_key_strategy"`             // add v2.8.9
+	IncrSyncExecutorDupKeySkipRules           []string `config:"incr_sync.executor.dup_key_skip_rules"`           // add v2.8.9
+	IncrSyncExecutorImmutableShardKeyFallback bool     `config:"incr_sync.executor.immutable_shard_key_fallback"` // add v2.8.9
+	IncrSyncConflictWriteTo                   string   `config:"incr_sync.conflict_write_to"`                     // remove "sdk" option since v2.4.21
+	IncrSyncExecutorMajorityEnable            bool     `config:"incr_sync.executor.majority_enable"`
+	IncrSyncBypassDocumentValidation          bool     `config:"incr_sync.executor.bypass_document_validation"` // add v2.8.7
+	IncrSyncFieldWhitelist                    []string `config:"incr_sync.field.whitelist"`                     // add field-level sync
 
 	/*---------------------------------------------------------*/
 	// inner variables, not open to user
@@ -117,6 +124,8 @@ type Configuration struct {
 	SourceDBVersion                    string
 	TargetDBVersion                    string
 	IncrSyncExecutorDupKeySkipRulesMap map[string]map[string]struct{}
+	FullSyncFieldWhitelistMap          map[string]map[string]struct{} // ns -> top-level field set
+	IncrSyncFieldWhitelistMap          map[string]map[string]struct{} // ns -> top-level field set
 
 	/*---------------------------------------------------------*/
 	// deprecate variables
@@ -135,7 +144,20 @@ func (configuration *Configuration) IsShardCluster() bool {
 	return len(configuration.MongoUrls) > 1
 }
 
-var Options Configuration
+// IsDocumentDBTarget reports whether the destination is Amazon DocumentDB rather
+// than MongoDB. DocumentDB only emulates the MongoDB API and rejects applyOps,
+// the listCollections "type" filter and retryable writes, so the target-side
+// paths have to avoid them (#1041).
+func (configuration *Configuration) IsDocumentDBTarget() bool {
+	return configuration.SpecialTargetDBFlag == utils.VarSpecialTargetDBFlagDocumentDB
+}
+
+// Seed defaults before ConfigLoader.Load so an explicit false remains false.
+var Options = DefaultConfiguration()
+
+func DefaultConfiguration() Configuration {
+	return Configuration{IncrSyncLazyOplogParse: true}
+}
 
 func GetSafeOptions() Configuration {
 	polish := new(Configuration)

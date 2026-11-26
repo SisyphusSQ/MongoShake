@@ -83,9 +83,20 @@ func (filter *OpTypeFilter) Filter(log *oplog.PartialLog) bool {
 	}
 
 	oplog.SetFiled(log.Object, "applyOps", remainOps)
-	l.Logger.Infof("OpTypeFilter filtered %d inner applyOps ops, drop oplog?[%v], after reorganize: %v",
-		filteredCount, len(remainOps) == 0, log.Object)
-	return len(remainOps) == 0
+	drop := len(remainOps) == 0 && dropEmptyApplyOps(log)
+	l.Logger.Infof("OpTypeFilter filtered %d inner applyOps ops, drop oplog?[%v]",
+		filteredCount, drop)
+	// full payload can be huge (whole transaction documents); debug only.
+	l.Logger.Debugf("OpTypeFilter applyOps after reorganize: %v", log.Object)
+	return drop
+}
+
+// Empty transaction applyOps still carry prepare/partial/final state. Keep the
+// envelope so the buffer can distinguish a filtered transaction from missing
+// history. Vectored inserts and non-transaction applyOps retain their drop rule.
+func dropEmptyApplyOps(log *oplog.PartialLog) bool {
+	meta, err := oplog.NewTxnMeta(log.ParsedLog)
+	return err == nil && !meta.IsTxn()
 }
 
 // hasApplyOpsDMLFilter reports whether inner applyOps rewriting is relevant for
@@ -209,7 +220,7 @@ type DDLFilter struct {
 
 func (filter *DDLFilter) Filter(log *oplog.PartialLog) bool {
 	operation, _ := oplog.ExtraCommandName(log.Object)
-	return log.Operation == "c" && operation != "applyOps" || strings.HasSuffix(log.Namespace, "system.indexes")
+	return log.Operation == "c" && operation != "applyOps" || oplog.IsLegacyIndexNamespace(log.Namespace)
 }
 
 type MigrateFilter struct {
@@ -273,16 +284,23 @@ func NewNamespaceFilter(white, black []string) *NamespaceFilter {
 func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 	var result bool
 
-	l.Logger.Debugf("NamespaceFilter check oplog:%v", log.Object)
+	l.Logger.Debugf("NamespaceFilter check oplog:%v", log.ObjectValue())
 
 	db := strings.SplitN(log.Namespace, ".", 2)[0]
 	if log.Operation != "c" {
 		// DML
 		// {"op" : "i", "ns" : "my.system.indexes", "o" : { "v" : 2, "key" : { "date" : 1 }, "name" : "date_1", "ns" : "my.tbl", "expireAfterSeconds" : 3600 }
-		if strings.HasSuffix(log.Namespace, "system.indexes") {
+		if oplog.IsLegacyIndexNamespace(log.Namespace) {
 			// DDL: change log.Namespace to ns of object, in order to do filter with real namespace
 			ns := log.Namespace
-			log.Namespace = oplog.GetKey(log.Object, "ns").(string)
+			indexNS, ok := log.ObjectKey("ns").(string)
+			if !ok || indexNS == "" {
+				// Keep malformed records on the execution path, which reports the error
+				// without acknowledging or silently filtering them.
+				l.Logger.Errorf("legacy index oplog has invalid ns: %v", log.ObjectValue())
+				return false
+			}
+			log.Namespace = indexNS
 			result = filter.filter(log)
 			log.Namespace = ns
 		} else {
@@ -362,15 +380,23 @@ func (filter *NamespaceFilter) Filter(log *oplog.PartialLog) bool {
 						l.Logger.Infof("filter vectored insert ops with ns:%v in o.applyOps oplog", innerNs)
 						return true
 					}
-					l.Logger.Infof("filter inner op with ns:%v in txn:%v", innerNs, log.Object)
+					l.Logger.Infof("filter inner op with ns:%v in applyOps txn", innerNs)
 					continue
 				} else {
 					remainOps = append(remainOps, ele)
 				}
 			}
 			oplog.SetFiled(log.Object, "applyOps", remainOps)
-			l.Logger.Infof("NamespaceFilter applyOps filter?[%v], after reorganize: %v", len(remainOps) == 0, log.Object)
-			return len(remainOps) == 0
+			drop := len(remainOps) == 0 && dropEmptyApplyOps(log)
+			if len(remainOps) == 0 {
+				l.Logger.Infof("NamespaceFilter applyOps has no selected ops, drop oplog?[%v]", drop)
+			} else {
+				// partial/kept inner ops is the steady-state path; keep it quiet.
+				l.Logger.Debugf("NamespaceFilter applyOps remainOps[%d] inner ops", len(remainOps))
+			}
+			// full payload can be huge (whole transaction documents); debug only.
+			l.Logger.Debugf("NamespaceFilter applyOps after reorganize: %v", log.Object)
+			return drop
 		default:
 			// such as: dropDatabase
 			return filter.filter(log)
