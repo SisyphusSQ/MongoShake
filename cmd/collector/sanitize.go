@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -57,6 +58,31 @@ func SanitizeOptions() error {
 	return checkConflict()
 }
 
+// checkIneffectiveOptions returns warnings for option combinations that are accepted but have no
+// effect. The caller logs them after the logger is initialized.
+func checkIneffectiveOptions() []string {
+	var warnings []string
+
+	if !conf.Options.IncrSyncBarrierOrderingEnable {
+		return warnings
+	}
+	// the guarantee needs a direct tunnel, every other tunnel hands ordering to its own receiver
+	if conf.Options.Tunnel != utils.VarTunnelDirect {
+		warnings = append(warnings, fmt.Sprintf("incr_sync.barrier.ordering_enable is set but "+
+			"incr_sync.tunnel[%v] != '%v': this tunnel hands ordering to its own receiver, so the "+
+			"DDL/DML ordering guarantee is not supported and the switch has no effect",
+			conf.Options.Tunnel, utils.VarTunnelDirect))
+	}
+	// the barrier is per-syncer, and a shard cluster runs one syncer per shard
+	if conf.Options.IsShardCluster() {
+		warnings = append(warnings, "incr_sync.barrier.ordering_enable is set but the source is a "+
+			"shard cluster, where every shard has its own syncer: DDL/DML ordering across shards is "+
+			"not guaranteed")
+	}
+
+	return warnings
+}
+
 func handleDeprecateConf() error {
 	// IncrSyncTunnel has deprecated since v2.4.1
 	if conf.Options.Tunnel == "" && conf.Options.IncrSyncTunnel != "" {
@@ -82,15 +108,10 @@ func handleDeprecateConf() error {
 	return nil
 }
 
-func checkDefaultValue() error {
-	// 1. global
-	if conf.Options.Id == "" {
-		conf.Options.Id = "mongoshake"
-	}
-	if conf.Options.SystemProfilePort <= 0 {
-		conf.Options.SystemProfilePort = 9200
-	}
-
+// sanitizeLogOptions defaults and validates the log options. It is split out of
+// checkDefaultValue so the caller can bring up the logger before the rest of
+// SanitizeOptions runs, making later configuration errors land in the log file.
+func sanitizeLogOptions() error {
 	if conf.Options.LogLevel == "" {
 		conf.Options.LogLevel = utils.VarLogLevelInfo
 	} else if conf.Options.LogLevel != utils.VarLogLevelDebug && conf.Options.LogLevel != utils.VarLogLevelInfo &&
@@ -108,6 +129,21 @@ func checkDefaultValue() error {
 	}
 	if conf.Options.LogMaxAge == 0 {
 		conf.Options.LogMaxAge = 7
+	}
+	return nil
+}
+
+func checkDefaultValue() error {
+	// 1. global
+	if conf.Options.Id == "" {
+		conf.Options.Id = "mongoshake"
+	}
+	if conf.Options.SystemProfilePort <= 0 {
+		conf.Options.SystemProfilePort = 9200
+	}
+
+	if err := sanitizeLogOptions(); err != nil {
+		return err
 	}
 	filterOpTypes, err := normalizeFilterOpTypes(conf.Options.FilterOpTypes)
 	if err != nil {
@@ -173,6 +209,11 @@ func checkDefaultValue() error {
 	}
 
 	// 2. full sync
+	// Bound refill work even when document_batch_size is 1. Use 0 to disable
+	// throttling instead of approximating unlimited throughput with a huge TPS.
+	if conf.Options.FullSyncTPS < 0 || conf.Options.FullSyncTPS > 1_000_000 {
+		return fmt.Errorf("full_sync.tps must be between 0 and 1000000 (0 disables throttling)")
+	}
 	if conf.Options.FullSyncReaderCollectionParallel <= 0 {
 		conf.Options.FullSyncReaderCollectionParallel = 6
 	}
@@ -236,6 +277,18 @@ func checkDefaultValue() error {
 				" 'incr_sync.shard_key == collection'")
 		}
 	}
+	// normalize tunnel before the worker/write_thread checks: write_thread only applies to
+	// non-direct tunnels, so the effective tunnel (default direct) must be known here.
+	if conf.Options.Tunnel == "" {
+		conf.Options.Tunnel = utils.VarTunnelDirect
+	} else if conf.Options.Tunnel != utils.VarTunnelDirect &&
+		conf.Options.Tunnel != utils.VarTunnelRpc &&
+		conf.Options.Tunnel != utils.VarTunnelTcp &&
+		conf.Options.Tunnel != utils.VarTunnelFile &&
+		conf.Options.Tunnel != utils.VarTunnelKafka &&
+		conf.Options.Tunnel != utils.VarTunnelMock {
+		return fmt.Errorf("incr_sync.tunnel in {direct, rpc, tcp, file, kafka, mock}")
+	}
 	if conf.Options.IncrSyncWorker == 0 {
 		conf.Options.IncrSyncWorker = 8
 	} else if conf.Options.IncrSyncWorker <= 0 || conf.Options.IncrSyncWorker > 256 {
@@ -243,9 +296,16 @@ func checkDefaultValue() error {
 	}
 	if conf.Options.IncrSyncTunnelWriteThread == 0 {
 		conf.Options.IncrSyncTunnelWriteThread = conf.Options.IncrSyncWorker
-	} else if conf.Options.IncrSyncTunnelWriteThread%conf.Options.IncrSyncWorker != 0 {
-		return fmt.Errorf("incr_sync.tunnel.write_thread[%v] must be an interge multiple of"+
-			" incr_sync.worker[%v]", conf.Options.IncrSyncTunnelWriteThread, conf.Options.IncrSyncWorker)
+	} else if conf.Options.Tunnel != utils.VarTunnelDirect &&
+		(conf.Options.IncrSyncTunnelWriteThread < 0 ||
+			conf.Options.IncrSyncTunnelWriteThread%conf.Options.IncrSyncWorker != 0) {
+		// write_thread sizes the kafka encoder pool (write_thread/worker per worker); the
+		// direct tunnel never reads it, so only non-direct tunnels enforce the multiple.
+		return fmt.Errorf("incr_sync.tunnel.write_thread[%d] must be a positive integer multiple of "+
+			"incr_sync.worker[%d] when tunnel=%s; set incr_sync.tunnel.write_thread to %d (or another "+
+			"multiple of %d), or remove it to default to incr_sync.worker",
+			conf.Options.IncrSyncTunnelWriteThread, conf.Options.IncrSyncWorker, conf.Options.Tunnel,
+			conf.Options.IncrSyncWorker, conf.Options.IncrSyncWorker)
 	}
 	if conf.Options.IncrSyncWorkerOplogCompressor == "" {
 		conf.Options.IncrSyncWorkerOplogCompressor = utils.VarIncrSyncWorkerOplogCompressorNone
@@ -275,16 +335,6 @@ func checkDefaultValue() error {
 	}
 	if conf.Options.IncrSyncReaderFetchBatchSize <= 0 {
 		conf.Options.IncrSyncReaderFetchBatchSize = 1024
-	}
-	if conf.Options.Tunnel == "" {
-		conf.Options.Tunnel = utils.VarTunnelDirect
-	} else if conf.Options.Tunnel != utils.VarTunnelDirect &&
-		conf.Options.Tunnel != utils.VarTunnelRpc &&
-		conf.Options.Tunnel != utils.VarTunnelTcp &&
-		conf.Options.Tunnel != utils.VarTunnelFile &&
-		conf.Options.Tunnel != utils.VarTunnelKafka &&
-		conf.Options.Tunnel != utils.VarTunnelMock {
-		return fmt.Errorf("incr_sync.tunnel in {direct, rpc, tcp, file, kafka, mock}")
 	}
 	if conf.Options.TunnelMessage == "" {
 		conf.Options.TunnelMessage = utils.VarTunnelMessageRaw
@@ -316,6 +366,16 @@ func checkDefaultValue() error {
 	}
 	if conf.Options.IncrSyncReaderBufferTime <= 0 {
 		conf.Options.IncrSyncReaderBufferTime = 1
+	}
+
+	// special.target.db.flag opts the destination out of the MongoDB-only commands
+	// DocumentDB rejects (#1041).
+	if conf.Options.SpecialTargetDBFlag != "" &&
+		conf.Options.SpecialTargetDBFlag != utils.VarSpecialTargetDBFlagDocumentDB {
+		return fmt.Errorf("special.target.db.flag should be empty or 'documentdb'")
+	}
+	if conf.Options.IsDocumentDBTarget() && conf.Options.Tunnel != utils.VarTunnelDirect {
+		return fmt.Errorf("special.target.db.flag = 'documentdb' requires tunnel = 'direct'")
 	}
 
 	/********************************/
@@ -372,6 +432,120 @@ func parseDupKeySkipRules() error {
 	return nil
 }
 
+// parseFieldWhitelists parses full_sync.field.whitelist / incr_sync.field.whitelist
+// (format: db.coll:f1,f2;db2.coll2:g1), validates them against filter.namespace.white
+// and each other, then populates the generated maps on conf.Options.
+func parseFieldWhitelists() error {
+	fullMap, err := parseFieldWhitelistRules(conf.Options.FullSyncFieldWhitelist, "full_sync.field.whitelist")
+	if err != nil {
+		return err
+	}
+	incrMap, err := parseFieldWhitelistRules(conf.Options.IncrSyncFieldWhitelist, "incr_sync.field.whitelist")
+	if err != nil {
+		return err
+	}
+
+	if len(fullMap) == 0 && len(incrMap) == 0 {
+		conf.Options.FullSyncFieldWhitelistMap = fullMap
+		conf.Options.IncrSyncFieldWhitelistMap = incrMap
+		return nil
+	}
+
+	if len(incrMap) != 0 &&
+		conf.Options.IncrSyncMongoFetchMethod != utils.VarIncrSyncMongoFetchMethodChangeStream {
+		return fmt.Errorf("incr_sync.field.whitelist requires incr_sync.mongo_fetch_method = %s",
+			utils.VarIncrSyncMongoFetchMethodChangeStream)
+	}
+
+	if len(conf.Options.FilterNamespaceWhite) == 0 {
+		return fmt.Errorf("field whitelist requires filter.namespace.white to be set")
+	}
+	nsFilter := filter.NewNamespaceFilter(conf.Options.FilterNamespaceWhite, nil)
+	notCovered := make([]string, 0)
+	for ns := range fullMap {
+		if nsFilter.FilterNs(ns) {
+			notCovered = append(notCovered, ns)
+		}
+	}
+	for ns := range incrMap {
+		if nsFilter.FilterNs(ns) {
+			notCovered = append(notCovered, ns)
+		}
+	}
+	if len(notCovered) != 0 {
+		sort.Strings(notCovered)
+		return fmt.Errorf("field whitelist namespace(s) %v not covered by filter.namespace.white", notCovered)
+	}
+
+	for ns, fullFields := range fullMap {
+		incrFields, ok := incrMap[ns]
+		if !ok {
+			continue
+		}
+		if !fieldSetEqual(fullFields, incrFields) {
+			return fmt.Errorf("field whitelist mismatch for ns[%s]: full_sync=%v, incr_sync=%v",
+				ns, sortedFieldSet(fullFields), sortedFieldSet(incrFields))
+		}
+	}
+
+	conf.Options.FullSyncFieldWhitelistMap = fullMap
+	conf.Options.IncrSyncFieldWhitelistMap = incrMap
+	return nil
+}
+
+func parseFieldWhitelistRules(rules []string, confName string) (map[string]map[string]struct{}, error) {
+	out := make(map[string]map[string]struct{})
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+		parts := strings.SplitN(rule, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("%s should be db.collection:field1,field2; got [%s]", confName, rule)
+		}
+		ns := strings.TrimSpace(parts[0])
+		if ns == "" || !strings.Contains(ns, ".") {
+			return nil, fmt.Errorf("%s namespace should be db.collection; got [%s]", confName, rule)
+		}
+		if _, ok := out[ns]; !ok {
+			out[ns] = make(map[string]struct{})
+		}
+		for _, field := range strings.Split(parts[1], ",") {
+			field = strings.TrimSpace(field)
+			if field == "" {
+				return nil, fmt.Errorf("%s contains empty field for [%s]", confName, rule)
+			}
+			if strings.Contains(field, ".") {
+				return nil, fmt.Errorf("%s does not support nested/dotted field [%s] in v1", confName, field)
+			}
+			out[ns][field] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func fieldSetEqual(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedFieldSet(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func checkMasterQuorumOptions() error {
 	if !conf.Options.MasterQuorum {
 		return nil
@@ -409,23 +583,29 @@ func normalizeFilterOpTypes(opTypes []string) ([]string, error) {
 func checkConnection() error {
 	// check mongo_urls
 	for _, mongo := range conf.Options.MongoUrls {
-		_, err := utils.NewMongoCommunityConn(mongo, conf.Options.MongoConnectMode, true,
+		conn, err := utils.NewMongoCommunityConn(mongo, conf.Options.MongoConnectMode, true,
 			utils.ReadWriteConcernDefault, utils.ReadWriteConcernDefault, conf.Options.MongoSslRootCaFile)
 		if err != nil {
 			return fmt.Errorf("connect source mongodb[%v] failed[%v]",
 				utils.BlockMongoUrlPassword(mongo, "***"), err)
 		}
+		conn.Close()
 	}
 
 	// check mongo_cs_url
 	if conf.Options.MongoCsUrl != "" {
-		_, err := utils.NewMongoCommunityConn(conf.Options.MongoCsUrl, utils.VarMongoConnectModeSecondaryPreferred,
+		conn, err := utils.NewMongoCommunityConn(conf.Options.MongoCsUrl, utils.VarMongoConnectModeSecondaryPreferred,
 			true, utils.ReadWriteConcernDefault, utils.ReadWriteConcernDefault, conf.Options.MongoSslRootCaFile)
 		if err != nil {
 			return fmt.Errorf("connect config-server[%v] failed[%v]",
 				utils.BlockMongoUrlPassword(conf.Options.MongoCsUrl, "***"), err)
 		}
+		conn.Close()
 	}
+
+	// DocumentDB rejects retryable writes before engine 8.0.2. Normalize before the
+	// target is first contacted so every target connection sees the same URI.
+	disableDocumentDBRetryWrites()
 
 	// check tunnel address
 	// no need to check target connection when debug flag set.
@@ -444,6 +624,7 @@ func checkConnection() error {
 			if i == 0 {
 				conf.Options.TargetDBVersion, _ = utils.GetDBVersion(targetConn)
 			}
+			targetConn.Close()
 		}
 	}
 
@@ -453,8 +634,12 @@ func checkConnection() error {
 		return err
 	}
 
-	sourceConn, _ := utils.NewMongoCommunityConn(source, utils.VarMongoConnectModeSecondaryPreferred, true,
+	sourceConn, err := utils.NewMongoCommunityConn(source, utils.VarMongoConnectModeSecondaryPreferred, true,
 		utils.ReadWriteConcernDefault, utils.ReadWriteConcernDefault, conf.Options.MongoSslRootCaFile)
+	if err != nil {
+		return fmt.Errorf("connect source mongodb[%v] failed[%v]", utils.BlockMongoUrlPassword(source, "***"), err)
+	}
+	defer sourceConn.Close()
 	// ignore error
 	conf.Options.SourceDBVersion, _ = utils.GetDBVersion(sourceConn)
 	if ok, err := utils.GetAndCompareVersion(sourceConn, utils.VarMongoVersion26,
@@ -465,6 +650,36 @@ func checkConnection() error {
 	}
 
 	return nil
+}
+
+// disableDocumentDBRetryWrites turns retryable writes off on every URI that points
+// at a DocumentDB target: the tunnel addresses, plus the checkpoint storage unless
+// it is spelled exactly like one of the source URLs. The driver enables retryable
+// writes by default and DocumentDB engines before 8.0.2 reject them with code 301
+// (#1041).
+//
+// The checkpoint URL is excluded by matching the sources rather than the targets,
+// so a target URI spelled differently from tunnel.address is still covered. A
+// source URL spelled differently is normalized too, which is harmless: MongoDB
+// accepts the option. An empty value is left alone because checkConflict defaults
+// it to a source cluster afterwards.
+func disableDocumentDBRetryWrites() {
+	if !conf.Options.IsDocumentDBTarget() {
+		return
+	}
+	for i, address := range conf.Options.TunnelAddress {
+		conf.Options.TunnelAddress[i] = utils.DisableRetryWrites(address)
+	}
+	ckpt := conf.Options.CheckpointStorageUrl
+	if ckpt == "" || ckpt == conf.Options.MongoSUrl {
+		return
+	}
+	for _, source := range conf.Options.MongoUrls {
+		if ckpt == source {
+			return
+		}
+	}
+	conf.Options.CheckpointStorageUrl = utils.DisableRetryWrites(ckpt)
 }
 
 func checkConflict() error {
@@ -524,6 +739,10 @@ func checkConflict() error {
 	if len(conf.Options.FilterPassSpecialDb) != 0 {
 		// init ns
 		filter.InitNs(conf.Options.FilterPassSpecialDb)
+	}
+	// field-level whitelist (parse + validate against filter.namespace.white)
+	if err := parseFieldWhitelists(); err != nil {
+		return err
 	}
 	// special variable
 	if conf.Options.SpecialSourceDBFlag != "" &&
@@ -589,6 +808,7 @@ func checkConflict() error {
 			return fmt.Errorf("connect source[%v] failed[%v]",
 				utils.BlockMongoUrlPassword(source, "***"), err)
 		}
+		defer conn.Close()
 		if isOk, err := utils.GetAndCompareVersion(conn, utils.VarMongoVersion401, conf.Options.SourceDBVersion); err != nil {
 			return fmt.Errorf("compare source[%v] to %s failed[%v]", source, utils.VarMongoVersion401, err)
 		} else if !isOk {

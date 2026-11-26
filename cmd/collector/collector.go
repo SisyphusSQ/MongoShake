@@ -45,6 +45,7 @@ func main() {
 	var err error
 	defer handleExit()
 	defer func() {
+		utils.GlobalDupKeyLog.Flush()
 		if l.Logger != nil {
 			_ = l.Logger.Close()
 		}
@@ -81,11 +82,13 @@ func main() {
 		crash(fmt.Sprintf("Configure file %s parse failed. %v", *configuration, err), -2)
 	}
 
-	// verify collector options and revise
-	if err = SanitizeOptions(); err != nil {
-		crash(fmt.Sprintf("Conf.Options check failed: %s", err.Error()), -4)
+	// Bring up the logger before SanitizeOptions so a configuration error is recorded in the
+	// log file, not only stdout: production setups often discard stdout, which made these
+	// errors look like a silent exit. Log options are sanitized first (the logger needs them);
+	// SanitizeOptions re-runs that step idempotently.
+	if err := sanitizeLogOptions(); err != nil {
+		crash(fmt.Sprintf("Conf.Options log check failed: %s", err.Error()), -4)
 	}
-
 	if err := utils.InitialLoggerWithRotation(conf.Options.LogDirectory,
 		conf.Options.LogFileName, conf.Options.LogLevel, conf.Options.LogFlush,
 		*verbose, conf.Options.LogMaxSizeMb, conf.Options.LogMaxAge); err != nil {
@@ -95,7 +98,21 @@ func main() {
 	defer utils.Goodbye()
 	l.Logger.Infof("log init succeed. log.dir[%v] log.name[%v] log.level[%v]",
 		conf.Options.LogDirectory, conf.Options.LogFileName, conf.Options.LogLevel)
+
+	utils.StartCoverageFlush()
+
+	// verify collector options and revise
+	if err = SanitizeOptions(); err != nil {
+		// the deferred Logger.Close() flushes this to the log file during panic unwinding
+		l.Logger.Criticalf("Conf.Options check failed: %s", err.Error())
+		crash(fmt.Sprintf("Conf.Options check failed: %s", err.Error()), -4)
+	}
 	l.Logger.Infof("MongoDB Version Source[%v] Target[%v]", conf.Options.SourceDBVersion, conf.Options.TargetDBVersion)
+
+	// accepted but ineffective options, logged here now that the logger is initialized
+	for _, warning := range checkIneffectiveOptions() {
+		l.Logger.Warnf("%s", warning)
+	}
 
 	conf.Options.Version = utils.BRANCH
 

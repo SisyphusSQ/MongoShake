@@ -227,7 +227,8 @@ func TestTransformLog(t *testing.T) {
 		logs := []*OplogRecord{
 			mockTransLogs("i", "fdb1.tc1", bson.D{primitive.E{Key: "a", Value: 1}}),
 		}
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, mockTransLogs("i", "fdb2.tc1", bson.D{primitive.E{Key: "a", Value: 1}}), logs[0], "should be equal")
 	}
 
@@ -253,7 +254,8 @@ func TestTransformLog(t *testing.T) {
 				}},
 			}),
 		}
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, mockTransLogs("i", "tdb1.fcol1", bson.D{primitive.E{"a", 1}}), logs[0], "should be equal")
 		assert.Equal(t, mockTransLogs("i", "fdb2.fcol2", bson.D{
 			primitive.E{"a", 1},
@@ -295,7 +297,8 @@ func TestTransformLog(t *testing.T) {
 				}},
 			}),
 		}
-		logs = transformLogs(logs, nsTrans, true)
+		logs, err := transformLogs(logs, nsTrans, true)
+		assert.NoError(t, err)
 		assert.Equal(t, mockTransLogs("i", "tdb1.fcol1", bson.D{primitive.E{"a", 1}}), logs[0], "should be equal")
 		assert.Equal(t, mockTransLogs("i", "fdb2.fcol2", bson.D{
 			primitive.E{"a", 1},
@@ -335,7 +338,8 @@ func TestTransformLog(t *testing.T) {
 					primitive.E{"key", bson.D{primitive.E{"a", 1}}},
 					primitive.E{"ns", "fdb1.fcol1"}}}}),
 		}
-		logs = transformLogs(logs, nsTrans, true)
+		logs, err := transformLogs(logs, nsTrans, true)
+		assert.NoError(t, err)
 		assert.Equal(t, mockTransLogs("i", "tdb1.tcol1", bson.D{primitive.E{"a", 1}}), logs[0], "should be equal")
 		assert.Equal(t, mockTransLogs("i", "fdb2.fcol2", bson.D{
 			primitive.E{"a", 1},
@@ -402,7 +406,8 @@ func TestTransformLog(t *testing.T) {
 		}
 
 		// fmt.Println(logs[0].original.partialLog)
-		logs = transformLogs(logs, nsTrans, true)
+		logs, err := transformLogs(logs, nsTrans, true)
+		assert.NoError(t, err)
 		// fmt.Println(logs[0].original.partialLog)
 		assert.Equal(t, mockTransLogs("c", "admin.$cmd", bson.D{
 			primitive.E{
@@ -454,7 +459,8 @@ func TestTransformLog(t *testing.T) {
 				primitive.E{"renameCollection", "fdb1.fcol1"},
 				primitive.E{"to", "fdb2.fcol2"}}),
 		}
-		logs = transformLogs(logs, nsTrans, true)
+		logs, err := transformLogs(logs, nsTrans, true)
+		assert.NoError(t, err)
 		assert.Equal(t,
 			mockTransLogs("c", "tdb1.tcol1", bson.D{
 				primitive.E{"renameCollection", "tdb1.tcol1"},
@@ -484,7 +490,8 @@ func TestTransformLog(t *testing.T) {
 			}),
 		}
 
-		logs = transformLogs(logs, nsTrans, true)
+		logs, err := transformLogs(logs, nsTrans, true)
+		assert.NoError(t, err)
 		assert.Equal(t, mockTransLogs("c", "admin.$cmd", bson.D{
 			primitive.E{
 				Key: "applyOps",
@@ -523,7 +530,8 @@ func TestTransformLog(t *testing.T) {
 			}),
 		}
 
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, mockTransLogs("c", "admin.$cmd", bson.D{
 			primitive.E{
 				Key: "applyOps",
@@ -558,7 +566,8 @@ func TestTransformLog(t *testing.T) {
 			}),
 		}
 
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, mockTransLogs("c", "admin.$cmd", bson.D{
 			primitive.E{
 				Key: "applyOps",
@@ -584,7 +593,8 @@ func TestTransformLog(t *testing.T) {
 			},
 		})
 
-		ret := transformPartialLog(log.original.partialLog, nsTrans, false)
+		ret, err := transformPartialLog(log.original.partialLog, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Nil(t, ret, "should be equal")
 	}
 
@@ -597,7 +607,8 @@ func TestTransformLog(t *testing.T) {
 		logs := []*OplogRecord{
 			mockTransLogs("i", "fdb1.system.buckets.weather", bson.D{primitive.E{Key: "data", Value: 1}}),
 		}
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, "tdb1.system.buckets.weather2", logs[0].original.partialLog.Namespace,
 			"system.buckets.weather should be transformed to tdb1.system.buckets.weather2")
 	}
@@ -609,7 +620,8 @@ func TestTransformLog(t *testing.T) {
 		logs := []*OplogRecord{
 			mockTransLogs("i", "fdb1.system.buckets.weather", bson.D{primitive.E{Key: "data", Value: 1}}),
 		}
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, "tdb1.system.buckets.weather", logs[0].original.partialLog.Namespace,
 			"system.buckets.weather should be transformed to tdb1.system.buckets.weather")
 	}
@@ -623,7 +635,8 @@ func TestTransformLog(t *testing.T) {
 				primitive.E{Key: "create", Value: "system.buckets.weather"},
 			}),
 		}
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, "tdb1.system.buckets.weather2", logs[0].original.partialLog.Namespace,
 			"DDL create system.buckets.weather should be transformed to tdb1.system.buckets.weather2")
 	}
@@ -635,7 +648,8 @@ func TestTransformLog(t *testing.T) {
 		logs := []*OplogRecord{
 			mockTransLogs("i", "fdb1.system.buckets.weather", bson.D{primitive.E{Key: "data", Value: 1}}),
 		}
-		logs = transformLogs(logs, nsTrans, false)
+		logs, err := transformLogs(logs, nsTrans, false)
+		assert.NoError(t, err)
 		assert.Equal(t, "fdb1.system.buckets.weather", logs[0].original.partialLog.Namespace,
 			"system.buckets.weather with no matching rule should stay unchanged")
 	}
@@ -651,7 +665,7 @@ func TestCalculateTop3(t *testing.T) {
 
 		var mp sync.Map
 
-		ret := calculateTop3(mp)
+		ret := calculateTop3(&mp)
 		assert.Equal(t, 0, len(ret), "should be equal")
 	}
 
@@ -663,7 +677,7 @@ func TestCalculateTop3(t *testing.T) {
 		val1 := uint64(10)
 		mp.Store("test1", &val1)
 
-		ret := calculateTop3(mp)
+		ret := calculateTop3(&mp)
 		assert.Equal(t, []Item{
 			{
 				Key: "test1",
@@ -682,7 +696,7 @@ func TestCalculateTop3(t *testing.T) {
 		mp.Store("test1", &val1)
 		mp.Store("test2", &val2)
 
-		ret := calculateTop3(mp)
+		ret := calculateTop3(&mp)
 		assert.Equal(t, []Item{
 			{
 				Key: "test1",
@@ -709,7 +723,7 @@ func TestCalculateTop3(t *testing.T) {
 		mp.Store("test4", &val4)
 		mp.Store("test5", &val5)
 
-		ret := calculateTop3(mp)
+		ret := calculateTop3(&mp)
 		assert.Equal(t, []Item{
 			{
 				Key: "test5",

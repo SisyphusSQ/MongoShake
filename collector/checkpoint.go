@@ -3,6 +3,7 @@ package collector
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -27,6 +28,34 @@ func (sync *OplogSyncer) newCheckpointManager(name string, startPosition interfa
 }
 
 /*
+ * initCheckpoint is the checkpoint-init segment of Start(): create the
+ * manager, load the durable context, then publish readiness to the parallel
+ * backfill. Extracted so the backfill race anchor exercises this exact
+ * sequence — moving the close earlier must redden the anchor (#1050 R1).
+ */
+func (sync *OplogSyncer) initCheckpoint() {
+	sync.newCheckpointManager(sync.Replset, sync.startPosition)
+	if _, ok := sync.startPosition.(int64); !ok {
+		// set resumeToken for aliyun_serverless
+		sync.reader.SetQueryTimestampOnEmpty(sync.startPosition)
+	}
+
+	// load checkpoint and set stage
+	if err := sync.loadCheckpoint(); err != nil {
+		l.Logger.Panicf("%v", err)
+	}
+	// HA startup preflight: the conditional anchor path requires a covering
+	// unique index; fail fast on a misconfigured store (#1052 HA P1, O2).
+	if conf.Options.MasterQuorum {
+		if err := sync.ckptManager.PrecheckAnchorGuard(); err != nil {
+			l.Logger.Panicf("HA anchor guard preflight failed: %v", err)
+		}
+	}
+	// publish checkpoint readiness to the parallel-mode backfill (#1050 B1)
+	close(sync.ckptReady)
+}
+
+/*
  * load checkpoint and do some checks
  */
 func (sync *OplogSyncer) loadCheckpoint() error {
@@ -39,6 +68,23 @@ func (sync *OplogSyncer) loadCheckpoint() error {
 	// set fetch method if not exists or empty
 	if !exists || checkpoint.FetchMethod == "" {
 		sync.ckptManager.SetFetchMethod(conf.Options.IncrSyncMongoFetchMethod)
+	}
+
+	// Persist the overlap-window bound (#1047). This runs on the serialize
+	// first run, where the coordinator passes the sampled full-finish ts.
+	// On incr restart the syncer position is deliberately 0 (the DDL guard
+	// keeps its legacy semantics) and the bound is already durable, restored
+	// to the workers by the coordinator — so nothing is re-persisted there.
+	// MaxInt64 ("always in window", serverless/mongos-only) stays in-memory
+	// and is not persisted (#1050 review M1).
+	// A flush failure is intentionally fatal: checkpoint I/O at the handover
+	// must not silently lose the window, consistent with Get() failures above
+	// (#1050 review N3).
+	if pos := utils.TimeStampToInt64(sync.fullSyncFinishPosition); pos > 0 && pos != math.MaxInt64 {
+		sync.ckptManager.SetFullFinishTs(pos)
+		if err := sync.ckptManager.FlushStaged(); err != nil {
+			return fmt.Errorf("persist full sync finish position failed[%v]", err)
+		}
 	}
 
 	// not enable oplog persist?
@@ -163,6 +209,23 @@ func (sync *OplogSyncer) checkpoint(flush bool, inputTs int64) bool {
 	l.Logger.Infof("checkpoint func lowest:%v inMemoryTs:%v flush:%v inputTs:%v",
 		utils.ExtractTimestampForLog(lowest), utils.ExtractTimestampForLog(inMemoryTs), flush, inputTs)
 
+	// hold the persisted checkpoint below the oldest transaction whose
+	// buffered oplogs have not been acked yet: those entries only live in
+	// memory, so a restart must be able to re-fetch them from the source.
+	// ackTs has to be real worker-ack progress rather than the candidate above:
+	// when inputTs > 0 the candidate is inputTs, which says nothing about what
+	// the workers have acked. batcher is nil for callers that drive checkpoint()
+	// directly, and calculateWorkerLowestCheckpoint dereferences it.
+	ackTs := lowest
+	if inputTs > 0 && sync.batcher != nil {
+		if wl, werr := sync.calculateWorkerLowestCheckpoint(); werr == nil && wl > 0 {
+			ackTs = wl
+		} else {
+			ackTs = 0
+		}
+	}
+	lowest = sync.clampCheckpointByTxnPin(lowest, ackTs)
+
 	lowestInt64 := lowest
 	if conf.Options.FullSyncReaderOplogStoreDisk && sync.persister.diskQueueLastTs > 0 {
 		checkpointTs := inMemoryTs
@@ -204,6 +267,22 @@ func (sync *OplogSyncer) checkpoint(flush bool, inputTs int64) bool {
 	l.Logger.Warnf("CheckpointOperation updated is not suitable. lowest [%d]. current [%v]. inputTs [%v]. reason : %v",
 		lowest, utils.ExtractTimestampForLog(inMemoryTs), inputTs, err)
 	return false
+}
+
+// clampCheckpointByTxnPin caps the checkpoint candidate below the oldest
+// transaction whose buffered oplogs are not fully acked. ackTs is the current
+// worker ack progress used to release completed pins.
+func (sync *OplogSyncer) clampCheckpointByTxnPin(candidate, ackTs int64) int64 {
+	if sync.batcher == nil || candidate <= 0 {
+		return candidate
+	}
+	pin := sync.batcher.OldestUnackedTxnPinTs(ackTs)
+	if pin > 0 && candidate >= pin {
+		l.Logger.Infof("CheckpointOperation clamp candidate[%v] below buffered transaction start[%v]",
+			utils.ExtractTimestampForLog(candidate), utils.ExtractTimestampForLog(pin))
+		return pin - 1
+	}
+	return candidate
 }
 
 func (sync *OplogSyncer) finishNonEmptyDiskSpool(checkpointTs, finishTs int64) bool {
